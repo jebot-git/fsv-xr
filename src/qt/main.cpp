@@ -5,6 +5,7 @@
 #include "domed.h"
 #include "appearance.h"
 #include "branchgeometry.h"
+#include "launchcontext.h"
 #include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -16,52 +17,11 @@
 #include <QQuickStyle>
 #include <QFileInfo>
 #include <QFile>
-#if defined(Q_OS_LINUX)
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-#include <cstring>
-#endif
-
-// DomeD launches desktop entries on its selected Wayland socket. Detect the
-// actual compositor rather than assuming a socket number or desktop name.
-static bool runningInDomeD()
-{
-#if defined(Q_OS_LINUX)
-    auto isDomePeer = [](int fd) {
-        ucred peer{};
-        socklen_t length = sizeof(peer);
-        return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &length) == 0
-            && peer.uid == getuid()
-            && QFileInfo(QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(peer.pid))).fileName()
-                == QStringLiteral("dome-compositor");
-    };
-    bool hasSocket = false;
-    const int inheritedSocket = qEnvironmentVariableIntValue("WAYLAND_SOCKET", &hasSocket);
-    if (hasSocket && inheritedSocket >= 0) return isDomePeer(inheritedSocket);
-    const QString display = qEnvironmentVariable("WAYLAND_DISPLAY");
-    if (display.isEmpty()) return false;
-    const QByteArray path = QFile::encodeName(QDir::isAbsolutePath(display)
-        ? display : QDir(qEnvironmentVariable("XDG_RUNTIME_DIR")).filePath(display));
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    if (path.size() >= qsizetype(sizeof(address.sun_path))) return false;
-    std::memcpy(address.sun_path, path.constData(), path.size() + 1);
-    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    if (fd < 0) return false;
-    const bool connected = connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0;
-    const bool identified = connected && isDomePeer(fd);
-    close(fd);
-    return identified;
-#else
-    return false;
-#endif
-}
-
 int main(int argc, char **argv)
 {
     // Inspect inherited Wayland FDs before Qt can consume WAYLAND_SOCKET.
-    const bool domeEnvironment = runningInDomeD();
+    const auto launchContext = LaunchContext::detect();
+    const bool domeEnvironment = launchContext.dome;
     if (domeEnvironment && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         qputenv("QT_QPA_PLATFORM", "wayland");
     // Force Vulkan for both desktop RHI and Qt's OpenXR graphics binding.
@@ -74,19 +34,21 @@ int main(int argc, char **argv)
     app.setDesktopFileName("org.fsvxr.fsv-xr");
     QImageReader::setAllocationLimit(64);
     QCommandLineParser parser;
-    parser.setApplicationDescription("Vulkan filesystem explorer. Automatically uses XR presentation inside DomeD and desktop presentation elsewhere.");
+    parser.setApplicationDescription("Vulkan filesystem explorer. Uses DomeD's desktop or XR launch realm; desktop presentation elsewhere.");
     parser.addHelpOption(); parser.addVersionOption();
     parser.addOption({"xr", "Start a standalone OpenXR session (requires an active runtime)."});
-    parser.addOption({"domed", "Run as a native DomeD Wayland client with spatial file popups."});
+    parser.addOption({"domed", "Use the DomeD Wayland bridge, preserving the socket's desktop/XR launch realm."});
     parser.addOption({"desktop", "Use desktop presentation even when launched inside DomeD."});
     parser.addOption({"smoke-test", "Render for three seconds, then exit (for CI)."});
-    parser.addPositionalArgument("directory", "Directory to visualize", "[directory]");
+    parser.addOption({"select", "Reveal the supplied files or directories in their parent folders."});
+    parser.addOption({"properties", "Reveal the supplied items and show their properties."});
+    parser.addPositionalArgument("locations", "Local paths, file: URLs or trash:/; additional locations open in tabs.", "[locations...]");
     parser.process(app);
     const bool xr = parser.isSet("xr");
-    if (int(xr) + int(parser.isSet("domed")) + int(parser.isSet("desktop")) > 1) {
-        qCritical("--xr, --domed and --desktop are separate presentation modes."); return 2;
+    if (xr && (parser.isSet("domed") || parser.isSet("desktop"))) {
+        qCritical("--xr cannot be combined with --domed or --desktop."); return 2;
     }
-    const bool domed = parser.isSet("domed") || (!xr && !parser.isSet("desktop")
+    const bool domed = parser.isSet("domed") || (!xr
         && QGuiApplication::platformName().startsWith("wayland") && domeEnvironment);
     // Desktop-specific Quick styles (e.g. Kirigami) can ignore application
     // palettes and continue using the host desktop's colours. Fusion honours
@@ -102,10 +64,16 @@ int main(int argc, char **argv)
     qmlRegisterType<BranchGeometry>("Fsv", 1, 0, "BranchGeometry");
     FileSystem files;
     Appearance appearance(domed || xr);
+    auto openLocations = [&] {
+        auto locations = parser.positionalArguments();
+        if (locations.isEmpty()) locations << QDir::homePath();
+        for (int i = 0; i < locations.size(); ++i)
+            files.openLocation(locations[i], parser.isSet("select"), parser.isSet("properties"), i > 0);
+    };
     if (domed) {
-        DomeWindow window(&files, &appearance);
+        DomeWindow window(&files, &appearance, launchContext.spatial && !parser.isSet("desktop"));
         if (!window.ready()) return 1;
-        files.navigate(parser.positionalArguments().value(0, QDir::homePath()));
+        openLocations();
         window.show();
         if (parser.isSet("smoke-test")) QTimer::singleShot(3000, &app, &QCoreApplication::quit);
         return app.exec();
@@ -119,7 +87,7 @@ int main(int argc, char **argv)
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
     engine.load(QUrl(xr ? "qrc:/qml/Xr.qml" : "qrc:/qml/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
-    files.navigate(parser.positionalArguments().value(0, QDir::homePath()));
+    openLocations();
     if (parser.isSet("smoke-test")) QTimer::singleShot(3000, &app, &QCoreApplication::quit);
     return app.exec();
 }

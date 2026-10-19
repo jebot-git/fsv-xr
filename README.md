@@ -28,12 +28,13 @@ update-desktop-database "$HOME/.local/share/applications"
 
 The local install provides **fsv-xr** in the application menu, plus **fsv-xr
 (OpenXR)** when standalone XR is built. Keep `~/.local/bin` in the desktop
-session's `PATH`. The main entry automatically uses spatial popups and DomeD's
-theme when launched from DomeD's application launcher, preserving its selected
-desktop/XR Wayland realm. Its menu actions can explicitly select desktop or the
+session's `PATH`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
+Desktop launches retain desktop presentation; XR launches use transparent scenes
+and spatial popups, including when a headset is already active. Its menu actions can explicitly select desktop or the
 current DomeD session. The OpenXR entry starts its own headset session using the
-active runtime; use the main entry inside DomeD. Installation does not change
-the default file manager or the OpenXR runtime.
+active runtime; use the main entry inside DomeD. The install includes Dome-specific MIME defaults; run `fsv-xr-dome-default`
+to enable the user override for DomeD without changing KDE/GNOME defaults.
+The OpenXR runtime is unchanged.
 
 Use `-DFSV_XR=OFF` to build without standalone XR. Desktop and DomeD modes still
 work. Meson is also supported:
@@ -157,13 +158,18 @@ space for their names below their children.
 
 Launch against the **socket printed by your DomeD compositor**, using the same
 `XDG_RUNTIME_DIR`. DomeD owns the OpenXR session and hand tracking in this mode;
-fsv-xr consumes its normal Wayland seat input. No new IPC protocol or second XR
-session is introduced.
+fsv-xr consumes its normal Wayland seat input and never opens a second XR
+session. The companion integration and deployment steps are in
+[docs/domed-integration.md](docs/domed-integration.md).
 
-Launching the ordinary application entry inside DomeD automatically selects this
-XR-aware presentation, including when Wayland supplies an inherited socket FD.
-Launching from the regular desktop selects desktop presentation even if an XR
-runtime or headset is active. The explicit CLI mode switches remain available.
+The compositor publishes a versioned `<wayland-socket>.dome-session.json` record
+for each of its two sockets. fsv-xr verifies the socket peer and compositor PID,
+then uses the socket's launch realm, including inherited `WAYLAND_SOCKET` FDs.
+DomeD desktop launches retain an opaque desktop view and inline properties;
+XR launches use spatial presentation. A missing/invalid record falls back to
+desktop presentation. Headset presence alone never selects XR.
+`--desktop` explicitly requests desktop presentation while retaining DomeD's
+Wayland bridge when needed; `--xr` explicitly starts standalone OpenXR.
 XR views have a transparent background and omit the desktop base plate. DomeD's
 Wayland surface preserves alpha; controls and Places retain their themed panels.
 Standalone OpenXR requests passthrough where supported by the active runtime.
@@ -178,16 +184,18 @@ keyboard modifier. DomeD's grips and two-hand gestures continue to manipulate th
 application's window/panel as defined by DomeD.
 
 DomeD's current compositor does not provide the presentation support required by
-this client's native Vulkan swapchain. `--domed` therefore renders the same Qt
+this client's native Vulkan swapchain. Both DomeD launch realms therefore render the same Qt
 Quick scene offscreen with **Vulkan**, reads it back at up to 30 Hz, and presents a
 Qt Widgets raster Wayland surface (`wl_shm`). This has CPU/readback overhead and
-matches DomeD's current CPU client-texture bridge. The standard desktop mode uses
-native Vulkan presentation.
+matches DomeD's current CPU client-texture bridge. Desktop sessions outside DomeD
+use native Vulkan presentation.
 
-Selecting a file in `--domed` opens a real Wayland `xdg_popup` containing its MIME
+Selecting a file in the DomeD XR realm opens a real Wayland `xdg_popup` containing its MIME
 type, size, modification time, owner, path, and an asynchronous thumbnail preview.
 The popup attaches at the file object's projected top centre; it does not take a
-normal window/lane slot. DomeD controls placement: in room-dome view it raises the
+normal window/lane slot. Single-click previews wait for the system double-click
+interval so a mouse double-click can open a folder. Programmatic Properties
+requests before any input use a non-grabbing `xdg_popup`. DomeD controls placement: in room-dome view it raises the
 panel above its owning window and draws a beam to the file attachment point;
 direct view aligns it with the attachment point. The preview supports hand-pointer
 input, Open, Close, Escape and outside-click dismissal. Refreshing, navigating or
@@ -223,7 +231,12 @@ checks main/popup textures, injects LMB/RMB/MMB XR seat events, verifies live th
 changes, exact context anchors, nested menu input, native keyboard handling,
 oversized menu scrolling, popup dismissal and cleanup. Captures are saved in
 `build/domed-probe/`.
-It does not modify DomeD sources, the user's appearance file, or runtime settings.
+It also checks desktop/XR socket and inherited-FD launches while XR is active,
+Dome-specific MIME defaults, real FileManager1 requests, Super+E, physical mouse
+selection/context menus, MMB drag and hover zoom, wheel zoom, background tilt,
+and folder double-clicks. Its private D-Bus session and synthetic XR heartbeat
+exercise compositor mouse routing without a headset. It does not modify DomeD
+sources, the user's appearance file, or runtime settings.
 
 ## Standalone OpenXR
 

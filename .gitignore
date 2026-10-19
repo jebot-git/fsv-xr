@@ -43,3 +43,5 @@ builddir
 /fsv-xr-desktop.png
 /fsv-xr-map-preview.png
 /fsv-xr-tree-preview.png
+
+__pycache__/

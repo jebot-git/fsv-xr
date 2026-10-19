@@ -37,6 +37,7 @@ XrView {
     onPitchChanged: storeView()
     Component.onCompleted: { restoreView(); viewReady = true }
     Connections { target: files; function onViewStateChanged() { if (view.viewReady) view.restoreView() } }
+    Connections { target: files; function onPropertiesRequested() { preview.reopen() } }
     function changeZoom(delta) {
         const target = Math.max(.1, Math.min(3, zoom * Math.exp(delta)))
         if (target === zoom) return

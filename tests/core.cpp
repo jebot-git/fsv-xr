@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
 #include "trash.h"
+#include "launchcontext.h"
 #include "gestures.h"
 #include "thumbnail.h"
 #include <QDesktopServices>
@@ -28,6 +29,50 @@ class CoreTest : public QObject {
         return joints;
     }
 private slots:
+    void launchRealmMetadata() {
+        QTemporaryDir temp;
+        const QString socket = temp.filePath("wayland-test");
+        const QString metadata = socket + ".dome-session.json";
+        auto context = [&](int version, qint64 pid, const QString &realm) {
+            put(metadata, QString("{\"version\":%1,\"compositor_pid\":%2,\"realm\":\"%3\"}").arg(version).arg(pid).arg(realm).toUtf8());
+        };
+        const auto pid = QCoreApplication::applicationPid();
+        QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+        context(1, pid, "xr"); QVERIFY(LaunchContext::spatialForSocket(socket, pid));
+        QVERIFY(!LaunchContext::spatialForSocket(socket, pid + 1));
+        context(1, pid, "desktop"); QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+        context(2, pid, "xr"); QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+        context(1, pid, "unknown"); QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+        context(1, pid, "xr");
+        QVERIFY(QFile::setPermissions(metadata, QFile::ReadOwner | QFile::WriteOwner | QFile::WriteOther));
+        QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+        QVERIFY(QFile::remove(metadata));
+        const QString target = temp.filePath("linked-context");
+        put(target, QString("{\"version\":1,\"compositor_pid\":%1,\"realm\":\"xr\"}").arg(pid).toUtf8());
+        QVERIFY(QFile::link(target, metadata)); QVERIFY(!LaunchContext::spatialForSocket(socket, pid));
+    }
+    void fileManagerLocations() {
+        QTemporaryDir temp;
+        const QString file = temp.filePath("space # 漢字.txt"); put(file);
+        QVERIFY(QDir(temp.path()).mkdir("folder"));
+        FileSystem files;
+        QSignalSpy properties(&files, &FileSystem::propertiesRequested);
+        QSignalSpy errors(&files, &FileSystem::error);
+        files.openLocation(QUrl::fromLocalFile(temp.path()).toString(QUrl::FullyEncoded));
+        QTRY_VERIFY(!files.busy()); QCOMPARE(files.root(), temp.path());
+        files.openLocation(QUrl::fromLocalFile(file).toString(QUrl::FullyEncoded));
+        QTRY_VERIFY(!files.busy()); QCOMPARE(files.selection()["path"].toString(), file);
+        files.openLocation(QUrl::fromLocalFile(temp.filePath("folder")).toString(QUrl::FullyEncoded), true, true);
+        QTRY_VERIFY(!files.busy());
+        QCOMPARE(files.root(), temp.path()); QCOMPARE(files.selection()["name"].toString(), QString("folder"));
+        QCOMPARE(properties.size(), 1);
+        files.openLocation(file, false, false, true);
+        QTRY_VERIFY(!files.busy()); QCOMPARE(files.tabs().size(), 2);
+        QCOMPARE(files.selection()["path"].toString(), file);
+        files.openLocation("https://example.com/path"); QCOMPARE(errors.size(), 1);
+        QCOMPARE(files.root(), temp.path());
+        files.openLocation("trash:///"); QTRY_VERIFY(!files.busy()); QVERIFY(files.inTrash());
+    }
     void treePlatformsAndConnections() {
         QTemporaryDir temp;
         QDir root(temp.path());

@@ -17,7 +17,7 @@ class Appearance;
 class DomeWindow : public QWidget {
     Q_OBJECT
 public:
-    explicit DomeWindow(FileSystem *files, Appearance *appearance);
+    explicit DomeWindow(FileSystem *files, Appearance *appearance, bool spatial = true);
     ~DomeWindow() override;
     bool ready() const;
 protected:
@@ -29,6 +29,7 @@ private slots:
     void showContextMenu(const QPointF &anchor);
 private:
     void showMenu(QWidget *owner, const QPointF &anchor);
+    bool m_haveInput = false;
     FileSystem *m_files;
     Appearance *m_appearance;
     QPointer<QDialog> m_preview;

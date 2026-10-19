@@ -42,6 +42,15 @@ FileSystem::FileSystem(QObject *parent) : QAbstractListModel(parent)
             m_scanning = false;
             applyResult(m_scan.result(), false, true);
             saveTab();
+            auto &tab = m_tabs[m_currentTab];
+            if (!tab.reveal.isEmpty()) {
+                const QString requested = tab.reveal;
+                const bool found = selectedPath() == requested;
+                const bool show = tab.showProperties;
+                tab.reveal.clear(); tab.showProperties = false;
+                if (!found) emit error("The requested item is not in the displayed directory. The view may be limited; refresh or open its parent directory: " + requested);
+                else if (show) emit propertiesRequested();
+            }
         }
         if (m_pending) launchScan();
         else emit busyChanged();
@@ -329,6 +338,7 @@ void FileSystem::navigate(const QString &path)
     const QFileInfo info(QUrl(path).isLocalFile() ? QUrl(path).toLocalFile() : path);
     if (path != "trash:/" && (!info.isDir() || !info.isReadable())) { emit error("Cannot read directory: " + path); return; }
     if (m_operating) { emit error("Wait for the current operation to finish."); return; }
+    m_tabs[m_currentTab].reveal.clear(); m_tabs[m_currentTab].showProperties = false;
     const QString target = path == "trash:/" ? path : info.absoluteFilePath();
     if (m_root == target) { refresh(); return; }
     m_root = target;
@@ -338,6 +348,25 @@ void FileSystem::navigate(const QString &path)
     applyResult({}, false);
     emit rootChanged(); emit tabsChanged(); emit selectedChanged();
     requestScan(true);
+}
+void FileSystem::openLocation(const QString &location, bool selectItem, bool properties, bool inNewTab)
+{
+    if (location == "trash:/" || location == "trash:///") {
+        if (inNewTab) newTab("trash:/"); else navigate("trash:/");
+        return;
+    }
+    const QUrl url(location);
+    if (!url.scheme().isEmpty() && !url.isLocalFile()) { emit error("Only local file URLs and trash:/ are supported: " + location); return; }
+    const QFileInfo info(url.isLocalFile() ? url.toLocalFile() : location);
+    if (!info.exists() && !info.isSymLink()) { emit error("Location does not exist: " + location); return; }
+    const bool reveal = selectItem || properties || !info.isDir();
+    const QString directory = reveal ? info.absolutePath() : info.absoluteFilePath();
+    if (inNewTab) newTab(directory); else navigate(directory);
+    if (m_root != directory) return;
+    if (reveal) {
+        m_tabs[m_currentTab].reveal = info.absoluteFilePath();
+        m_tabs[m_currentTab].showProperties = properties;
+    }
 }
 void FileSystem::refresh()
 {
@@ -384,7 +413,7 @@ void FileSystem::launchScan()
 }
 void FileSystem::applyResult(const ScanResult &result, bool cached, bool watchChildren)
 {
-    const QString selection = selectedPath();
+    const QString selection = m_tabs[m_currentTab].reveal.isEmpty() ? selectedPath() : m_tabs[m_currentTab].reveal;
     bool changed = result.entries.size() != m_entries.size()
         || (m_layout == "tree" && m_treeRoot.value("path").toString() != m_root);
     for (int i = 0; !changed && i < m_entries.size(); ++i) {
@@ -399,6 +428,9 @@ void FileSystem::applyResult(const ScanResult &result, bool cached, bool watchCh
         for (int i = 0; i < m_entries.size(); ++i) if (m_entries[i].path == selection) m_selected = i;
         arrange(); endResetModel();
         emit selectedChanged();
+    }
+    if (!changed && !m_tabs[m_currentTab].reveal.isEmpty()) {
+        for (int i = 0; i < m_entries.size(); ++i) if (m_entries[i].path == selection) setSelected(i);
     }
     if (m_warning != result.warning) { m_warning = result.warning; emit warningChanged(); }
     m_cached = cached;

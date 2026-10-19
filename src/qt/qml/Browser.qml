@@ -35,6 +35,26 @@ ThemedPanel {
     onPitchChanged: storeView()
     Component.onCompleted: { restoreView(); viewReady = true }
     Connections { target: files; function onViewStateChanged() { if (window.viewReady) window.restoreView() } }
+    Connections { target: files; function onPropertiesRequested() {
+        requestedProperties.selectedPath = files.selection.path || ""
+        requestedProperties.restart()
+    } }
+    Timer {
+        id: requestedProperties
+        property string selectedPath: ""
+        interval: 16; repeat: true
+        onTriggered: {
+            if (!selectedPath || files.selection.path !== selectedPath) stop()
+            else if (!window.spatialPopups) { actions.showProperties(); stop() }
+            else if (window.previewSelection()) stop()
+        }
+    }
+    Timer {
+        id: clickPreview
+        property string selectedPath: ""
+        interval: Qt.styleHints.mouseDoubleClickInterval
+        onTriggered: { if (files.selection.path === selectedPath && !mouse.pressed) window.previewSelection() }
+    }
     signal previewRequested(point anchor)
     signal contextMenuRequested(point anchor)
     function showActionsAt(x, y) {
@@ -42,10 +62,12 @@ ThemedPanel {
         else actions.show(x, y)
     }
     function previewSelection() {
-        if (!spatialPopups || files.selected < 0) return
+        if (!spatialPopups || files.selected < 0 || view.width <= 0 || view.height <= 0) return false
         const top = world.mapPositionToScene(world.selectionTop(files.selection))
         const projected = view.mapFrom3DScene(top)
-        if (projected.z > 0) previewRequested(view.mapToItem(window, projected.x, projected.y))
+        if (projected.z <= 0 || !isFinite(projected.x) || !isFinite(projected.y)) return false
+        previewRequested(view.mapToItem(window, projected.x, projected.y))
+        return true
     }
     function changeZoom(delta) {
         const target = Math.max(.15, Math.min(8, zoom * Math.exp(delta)))
@@ -118,6 +140,7 @@ ThemedPanel {
                 property bool scrollWasActive: false
                 property bool rotating: false
                 onPressed: event => {
+                    clickPreview.stop()
                     scrollWasActive = scrollMode
                     scrollMode = false
                     previous = Qt.point(event.x, event.y)
@@ -151,8 +174,12 @@ ThemedPanel {
                 }
                 onReleased: event => {
                     rotating = false
-                    if (event.button === Qt.LeftButton && !(event.modifiers & Qt.AltModifier) && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5)
-                        window.previewSelection()
+                    if (event.button === Qt.LeftButton && !(event.modifiers & Qt.AltModifier) && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5 && window.spatialPopups) {
+                        // Allow a real mouse double-click to open a directory
+                        // before a preview popup can take the pointer grab.
+                        clickPreview.selectedPath = files.selection.path || ""
+                        clickPreview.restart()
+                    }
                     // A short MMB click enables scroll-button zoom, usable with DomeD's
                     // middle/thumb pinch without needing a keyboard modifier.
                     if (!scrollWasActive && event.button === Qt.MiddleButton && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5) {
@@ -160,11 +187,11 @@ ThemedPanel {
                     }
                 }
                 hoverEnabled: true
-                onCanceled: { scrollMode = false; rotating = false }
+                onCanceled: { clickPreview.stop(); scrollMode = false; rotating = false }
                 onExited: { if (!pressed) scrollMode = false }
                 Connections { target: window; function onActiveChanged() { if (!window.active) { mouse.scrollMode = false } } }
-                onDoubleClicked: event => { if (event.button === Qt.LeftButton) files.open(files.selected) }
-                onWheel: event => window.changeZoom(event.angleDelta.y / 1200)
+                onDoubleClicked: event => { clickPreview.stop(); if (event.button === Qt.LeftButton) files.open(files.selected) }
+                onWheel: event => { clickPreview.stop(); window.changeZoom(event.angleDelta.y ? event.angleDelta.y / 1200 : event.pixelDelta.y / 600); event.accepted = true }
                 Keys.onEscapePressed: { scrollMode = false; files.selected = -1 }
                 Keys.onLeftPressed: { scrollMode = false; window.rotateView(-5, 0) }
                 Keys.onRightPressed: { scrollMode = false; window.rotateView(5, 0) }

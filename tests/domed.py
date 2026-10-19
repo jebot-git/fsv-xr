@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -64,6 +65,13 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
     fixtures = Path(runtime) / "fixtures"
     fixtures.mkdir()
     (fixtures / "select-me.txt").write_text("fsv-xr Vulkan thumbnail test\nDomeD Wayland bridge")
+    env["HOME"] = str(fixtures)
+    env["XDG_CACHE_HOME"] = runtime + "/cache"
+    env["DOME_FILE_MANAGER"] = executable
+    env["DOME_FILE_MANAGER_SERVICE"] = "1"
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    env["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.readline().strip()
+    heartbeat_stop = threading.Event()
     dome = client = None
     def state():
         with urllib.request.urlopen(base + "/api/state", timeout=2) as response:
@@ -80,7 +88,8 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
             assert dome.poll() is None, "DomeD exited; see compositor.log"
             match = re.search(r"Dome Wayland socket: (\S+)", (out / "compositor.log").read_text())
             return match[1] if match else None
-        name = wait(socket_name)
+        desktop_name = wait(socket_name)
+        name = wait(lambda: (m[1] if (m := re.search(r"Dome XR Wayland socket: (\S+)", (out / "compositor.log").read_text())) else None))
         client_env = {**env, "WAYLAND_DISPLAY": name, "QT_QPA_PLATFORM": "wayland", "QT_FORCE_STDERR_LOGGING": "1", "WAYLAND_DEBUG": "1"}
         with (out / "client.log").open("w") as log:
             # Match application-menu launch: detect DomeD without --domed.
@@ -283,10 +292,137 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         assert not trashed.exists() and not metadata.exists(), "Restored item or metadata remained in Trash"
         client.terminate(); client.wait(timeout=3)
         wait(lambda: not state()["windows"] and not state().get("popups", []))
+        def post(path, value):
+            request = urllib.request.Request(base + path, data=json.dumps(value).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return json.load(response)
+        def control():
+            with urllib.request.urlopen(base + "/api/xr-control", timeout=2) as response:
+                return json.load(response)
+        def heartbeat():
+            while not heartbeat_stop.is_set():
+                post("/api/xr-session", {"visible": True, "focused": True, "head": {"position_m": [0,1.4,0], "orientation_xyzw": [0,0,0,1]}, "horizontal_fov_deg": 100})
+                heartbeat_stop.wait(.1)
+        pulse = threading.Thread(target=heartbeat, daemon=True); pulse.start()
+        wait(lambda: control()["visible"] and control()["input_realm"] == "xr")
+        # Desktop auto-detection also works through an inherited FD while XR is active.
+        with socket.socket(socket.AF_UNIX) as inherited, (out / "desktop-realm.log").open("w") as log:
+            inherited.connect(str(Path(runtime) / desktop_name))
+            desktop_env = {**client_env, "WAYLAND_SOCKET": str(inherited.fileno())}
+            desktop_env.pop("WAYLAND_DISPLAY", None)
+            client = subprocess.Popen([executable, str(fixtures)], env=desktop_env, pass_fds=(inherited.fileno(),), stdout=log, stderr=log)
+        win = wait(window); wid = win["id"]
+        assert win["origin"] == "desktop" and win["desktop_visible"], win
+        desktop_frame = wait(frame); time.sleep(.4); desktop_frame = wait(frame)
+        assert desktop_frame.getpixel(background_pixel)[3] == 255, "Desktop realm incorrectly uses XR transparency"
+        desktop_frame.save(out / "11-desktop-realm.png")
+        client.terminate(); client.wait(timeout=3)
+        wait(lambda: not state()["windows"])
+        # Query session-scoped MIME defaults and exercise the real FileManager1 service.
+        applications = Path(env["XDG_DATA_HOME"]) / "applications"; applications.mkdir(exist_ok=True)
+        desktop_entry = Path(__file__).resolve().parents[1] / "data/org.fsvxr.fsv-xr.desktop"
+        (applications / desktop_entry.name).write_text(desktop_entry.read_text().replace("Exec=fsv-xr", "Exec=" + executable).replace("TryExec=fsv-xr", "TryExec=" + executable))
+        subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/set-dome-default.py"), "--config-home", env["XDG_CONFIG_HOME"]], check=True, capture_output=True)
+        query = subprocess.run(["gio", "mime", "inode/directory"], env={**client_env, "XDG_CURRENT_DESKTOP": "Dome"}, check=True, capture_output=True, text=True)
+        assert "org.fsvxr.fsv-xr.desktop" in query.stdout.splitlines()[0], query.stdout
+        def manager(method, location, realm):
+            request_env = {**client_env, "WAYLAND_DISPLAY": desktop_name if realm == "desktop" else name}
+            subprocess.run(["gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1." + method, "['" + location + "']", ""], env=request_env, check=True, capture_output=True, timeout=5)
+            return wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None))
+        def close_window():
+            post("/api/action", {"op": "close", "id": wid})
+            wait(lambda: not state()["windows"] and not state().get("popups", []))
+        for realm, realm_socket in [("desktop", desktop_name), ("xr", name)]:
+            with (out / ("gio-" + realm + ".log")).open("w") as log:
+                subprocess.run(["gio", "open", fixtures.as_uri()], env={**client_env, "WAYLAND_DISPLAY": realm_socket, "XDG_CURRENT_DESKTOP": "Dome"}, check=True, stdout=log, stderr=log, timeout=5)
+            win = wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None)); wid = win["id"]
+            assert win["origin"] == realm, "GIO default folder activation lost its launch realm"
+            opened = wait(frame); time.sleep(.2); opened = wait(frame)
+            assert opened.getpixel(background_pixel)[3] == (255 if realm == "desktop" else 0)
+            close_window()
+        win = manager("ShowItems", (fixtures / "select-me.txt").as_uri(), "desktop"); wid = win["id"]
+        assert win["origin"] == "desktop", "FileManager1 ignored the background desktop caller's realm"
+        wait(frame); time.sleep(.4)
+        assert not state().get("popups", []), "Desktop reveal opened a spatial popup"
+        close_window()
+        win = manager("ShowItemProperties", (fixtures / "select-me.txt").as_uri(), "xr"); wid = win["id"]
+        assert win["origin"] == "xr" and not win["desktop_visible"], win
+        property_popup = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
+        wait(lambda: frame(property_popup["id"])).save(out / "12-filemanager-properties.png")
+        popup_click(property_popup["id"], [.85,.94])
+        wait(lambda: not state().get("popups", [])); close_window()
+        # Super+E follows the active XR realm and uses the configured default manager.
+        modifier = xd.keysym_to_keycode(XK.string_to_keysym("Super_L"))
+        xtest.fake_input(xd, X.KeyPress, modifier); xd.sync(); key("e")
+        xtest.fake_input(xd, X.KeyRelease, modifier); xd.sync()
+        win = wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None)); wid = win["id"]
+        assert win["origin"] == "xr" and not win["desktop_visible"], win
+        wait(frame); time.sleep(.7)
+        image = wait(frame)
+        uv = [(places_width + (image.width - places_width - inspector_width)/2) / image.width, .56]
+        physical = [450, 400]
+        def motion(x, y):
+            geo = host.get_geometry()
+            physical[:] = [x, y]
+            xtest.fake_input(xd, X.MotionNotify, x=int(x+geo.x), y=int(y+geo.y)); xd.sync(); time.sleep(.08)
+        def button(number, pressed=None):
+            for down in ([True, False] if pressed is None else [pressed]):
+                xtest.fake_input(xd, X.ButtonPress if down else X.ButtonRelease, number); xd.sync(); time.sleep(.05)
+        motion(*physical)
+        def aim(target=uv):
+            wait(lambda: not control()["mouse"])
+            packet([{"kind": "motion", "id": wid, "uv": target}], [{"op": "focus", "id": wid}]); time.sleep(.08)
+            motion(physical[0]+1, physical[1])
+            wait(lambda: control()["mouse"] and control().get("cursor") and control()["cursor"]["id"] == wid)
+        def view_crop(image):
+            return image.crop((int(places_width+5), 100, image.width-int(inspector_width)-5, image.height-45))
+        def changed(before, message):
+            time.sleep(.2)
+            after = wait(frame)
+            assert ImageChops.difference(view_crop(before).convert("RGB"), view_crop(after).convert("RGB")).getbbox(), message
+            return after
+        aim(); button(1)
+        physical_popup = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
+        wait(lambda: frame(physical_popup["id"])).save(out / "13-physical-mouse-preview.png")
+        key("Escape"); wait(lambda: not state().get("popups", []))
+        aim(); button(3)
+        wait(lambda: any(p.get("context_at") is not None for p in state().get("popups", [])))
+        key("Escape"); wait(lambda: not state().get("popups", []))
+        aim(); before = wait(frame); button(2, True); motion(physical[0]+30, physical[1]+15)
+        time.sleep(.85)
+        assert control()["mouse"], "XR MMB drag lost ownership while held"
+        button(2, False); changed(before, "Physical XR MMB drag did not pan the view")
+        aim(); before = wait(frame); button(2); motion(physical[0], physical[1]-28)
+        changed(before, "XR scroll-button zoom did not receive hover motion")
+        button(2) # Stop scroll-button mode.
+        aim(); before = wait(frame); button(4)
+        changed(before, "Physical XR wheel did not zoom")
+        aim([(places_width+12)/image.width, .23]); before = wait(frame)
+        button(1, True); motion(physical[0]+30, physical[1]+22); button(1, False)
+        changed(before, "Physical XR LMB background drag did not tilt")
+        close_window()
+        # Preview delay must leave real mouse double-clicks usable for opening folders.
+        double = Path(runtime) / "double"; (double / "child").mkdir(parents=True)
+        win = manager("ShowFolders", double.as_uri(), "xr"); wid = win["id"]
+        wait(frame); time.sleep(.5); aim()
+        button(1); button(1)
+        wait(lambda: any(w["id"] == wid and w["title"].endswith("/double/child") for w in state()["windows"]))
+        assert not state().get("popups", []), "Preview stole the double-click pointer grab"
+        close_window()
+        heartbeat_stop.set(); pulse.join(timeout=2)
         xd.close()
-        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup hand input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore and cleanup")
+        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup hand input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore, desktop/XR named and FD launch realms, MIME defaults, FileManager1 reveal/properties, Super+E, physical XR LMB/RMB/MMB/wheel/scroll-button/double-click and cleanup")
     finally:
-        for process in (client, dome, xvfb):
+        heartbeat_stop.set()
+        if dome is not None and dome.poll() is None:
+            try:
+                for win in state()["windows"]:
+                    request = urllib.request.Request(base + "/api/action", data=json.dumps({"op":"close", "id":win["id"]}).encode(), headers={"Content-Type":"application/json"})
+                    urllib.request.urlopen(request, timeout=2).close()
+                time.sleep(.3)
+            except Exception:
+                pass
+        for process in (client, dome, xvfb, bus):
             if process is not None:
                 process.terminate()
                 try:

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "domed.h"
+#include <QKeyEvent>
 #include "filesystem.h"
 #include "thumbnail.h"
 #include "appearance.h"
@@ -23,7 +24,8 @@
 namespace {
 class PreviewPanel : public QDialog {
 public:
-    explicit PreviewPanel(QWidget *parent) : QDialog(parent, Qt::Popup | Qt::FramelessWindowHint) {}
+    explicit PreviewPanel(QWidget *parent, bool grabbing)
+        : QDialog(parent, (grabbing ? Qt::Popup : Qt::ToolTip) | Qt::FramelessWindowHint) {}
 protected:
     void paintEvent(QPaintEvent *) override {
         // WA_TranslucentBackground disables QWidget's automatic background fill.
@@ -34,7 +36,7 @@ protected:
 };
 }
 
-DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance) : m_files(files), m_appearance(appearance)
+DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) : m_files(files), m_appearance(appearance)
 {
     setWindowTitle("fsv-xr — DomeD");
     connect(files, &FileSystem::rootChanged, this, [this, files] { setWindowTitle("fsv-xr — " + files->root()); });
@@ -42,6 +44,10 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance) : m_files(file
     setMouseTracking(true);
     setAttribute(Qt::WA_TranslucentBackground);
     resize(1280, 820);
+    // The offscreen renderer must not keep a closed file-manager process alive.
+    m_scene.setAttribute(Qt::WA_QuitOnClose, false);
+    m_scene.setMouseTracking(true);
+    m_scene.setFocusPolicy(Qt::StrongFocus);
     m_scene.setResizeMode(QQuickWidget::SizeRootObjectToView);
     m_scene.setClearColor(Qt::transparent);
     m_scene.resize(size());
@@ -51,7 +57,7 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance) : m_files(file
     m_scene.setAttribute(Qt::WA_DontShowOnScreen);
     m_scene.setSource(QUrl("qrc:/qml/Browser.qml"));
     if (m_scene.rootObject()) {
-        m_scene.rootObject()->setProperty("spatialPopups", true);
+        m_scene.rootObject()->setProperty("spatialPopups", spatial);
         connect(m_scene.rootObject(), SIGNAL(previewRequested(QPointF)), this, SLOT(showPreview(QPointF)));
         connect(m_scene.rootObject(), SIGNAL(contextMenuRequested(QPointF)), this, SLOT(showContextMenu(QPointF)));
     }
@@ -84,7 +90,9 @@ void DomeWindow::showPreview(const QPointF &anchor)
     if (m_preview) delete m_preview.data();
     // Qt::Popup creates a real xdg_popup with an attachment point on the owning
     // raster Wayland surface. DomeD supplies placement, beams and hand routing.
-    auto *panel = new PreviewPanel(this);
+    // A FileManager1 request can arrive before this window has an input serial.
+    // Qt's non-grabbing tooltip role still creates an xdg_popup in that case.
+    auto *panel = new PreviewPanel(this, m_haveInput);
     m_preview = panel;
     panel->setObjectName("spatialFilePreview");
     panel->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -231,6 +239,10 @@ void DomeWindow::paintEvent(QPaintEvent *)
 void DomeWindow::resizeEvent(QResizeEvent *event) { m_scene.resize(event->size()); QWidget::resizeEvent(event); }
 bool DomeWindow::event(QEvent *event)
 {
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress) m_haveInput = true;
+    if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape && m_preview && m_preview->isVisible()) {
+        m_preview->close(); event->accept(); return true;
+    }
     switch (event->type()) {
     case QEvent::MouseButtonPress: case QEvent::MouseButtonRelease: case QEvent::MouseButtonDblClick:
     case QEvent::MouseMove: case QEvent::Wheel: case QEvent::KeyPress: case QEvent::KeyRelease:

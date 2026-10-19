@@ -1,0 +1,3 @@
+[Default Applications]
+inode/directory=org.fsvxr.fsv-xr.desktop;
+x-scheme-handler/trash=org.fsvxr.fsv-xr.desktop;

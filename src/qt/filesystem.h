@@ -77,6 +77,7 @@ public:
     Q_INVOKABLE void activateTab(int index);
     Q_INVOKABLE void closeTab(int index);
     Q_INVOKABLE void navigate(const QString &path);
+    Q_INVOKABLE void openLocation(const QString &location, bool selectItem = false, bool properties = false, bool inNewTab = false);
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void up();
     Q_INVOKABLE void open(int index);
@@ -96,6 +97,7 @@ public:
                            const std::function<void(const ScanResult &)> &progress = {});
     static QString copyEntry(const QString &source, const QString &destination);
 signals:
+    void propertiesRequested();
     void rootChanged();
     void busyChanged();
     void warningChanged();
@@ -134,7 +136,8 @@ private:
         QString root, layout = "map";
         ScanResult snapshot;
         QVariantMap view;
-        QString selectedPath;
+        QString selectedPath, reveal;
+        bool showProperties = false;
         bool loaded = false;
     };
     QList<Tab> m_tabs;

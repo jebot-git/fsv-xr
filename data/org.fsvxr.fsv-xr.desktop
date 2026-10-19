@@ -2,20 +2,20 @@
 Type=Application
 Name=fsv-xr
 Comment=Explore the filesystem in 3D and OpenXR
-Exec=fsv-xr %f
+Exec=fsv-xr %U
 TryExec=fsv-xr
 Icon=system-file-manager
 Terminal=false
-Categories=System;FileManager;
+Categories=System;FileTools;FileManager;
 Keywords=filesystem;files;3D;Vulkan;XR;DomeD;
-MimeType=inode/directory;
+MimeType=inode/directory;x-scheme-handler/trash;
 StartupWMClass=org.fsvxr.fsv-xr
 Actions=Desktop;DomeD;
 
 [Desktop Action Desktop]
-Name=Open on Desktop
-Exec=fsv-xr --desktop %f
+Name=Use Desktop Presentation
+Exec=fsv-xr --desktop %U
 
 [Desktop Action DomeD]
 Name=Open in Current DomeD Session
-Exec=fsv-xr --domed %f
+Exec=fsv-xr %U

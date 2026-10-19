@@ -9,6 +9,7 @@ Item {
     property string removalPath: ""
     function confirmRemoval() { removalPath = files.selection.path || ""; confirmDelete.open() }
     function confirmEmptyTrash() { if (files.inTrash) emptyTrashDialog.open() }
+    function showProperties() { properties.open() }
     function show(x, y) { menu.x = x; menu.y = y; menu.open() }
     function edit(action) {
         if (files.inTrash) return
