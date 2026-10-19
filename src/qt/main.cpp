@@ -4,6 +4,7 @@
 #include "gestures.h"
 #include "domed.h"
 #include "appearance.h"
+#include "branchgeometry.h"
 #include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -98,6 +99,7 @@ int main(int argc, char **argv)
     if (xr) { qCritical("Built without Qt Quick 3D XR; rebuild with FSV_XR enabled."); return 2; }
 #endif
     qmlRegisterType<HandGesture>("Fsv", 1, 0, "HandGesture");
+    qmlRegisterType<BranchGeometry>("Fsv", 1, 0, "BranchGeometry");
     FileSystem files;
     Appearance appearance(domed || xr);
     if (domed) {

@@ -16,8 +16,9 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 import urllib.error
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageStat
 from Xlib import X, XK, display
 from Xlib.ext import xtest
 
@@ -40,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         port = sock.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
     env = {**os.environ, "DOME_PREVIEW_PORT": str(port), "XDG_RUNTIME_DIR": runtime,
-           "XDG_CONFIG_HOME": runtime + "/config", "RUST_LOG": "warn"}
+           "XDG_CONFIG_HOME": runtime + "/config", "XDG_DATA_HOME": runtime + "/data", "RUST_LOG": "warn"}
     xvfb_path = os.environ.get("DOME_XVFB") or shutil.which("Xvfb") or str(Path(compositor).parents[2] / ".local-deps/root/usr/bin/Xvfb")
     rd, wr = os.pipe()
     xvfb_log = (out / "xvfb.log").open("w")
@@ -101,14 +102,17 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         time.sleep(1)
         before = wait(frame)
         before.save(out / "01-vulkan-client.png")
-        # QML panels follow DomeD's light palette; the Vulkan clear colour follows
-        # its configured scene background rather than a hardcoded dark theme.
+        # QML panels follow DomeD's light palette; the XR scene preserves alpha.
         assert min(before.getpixel((before.width - 15, 75))[:3]) > 170, "DomeD light theme not applied to inspector"
         places_width = min(200, before.width * .2)
         inspector_width = min(310, before.width * .28)
         background_pixel = (int(places_width + 12), 75)
         assert before.getpixel(background_pixel)[3] == 0, "XR background lost its alpha"
-        assert min(before.getpixel((15,75))[:3]) > 170, "Places did not follow the light theme"
+        def places_median(image):
+            # The Places list scrolls to its current location. A single pixel
+            # can land on an icon/label when adding entries such as Trash.
+            return ImageStat.Stat(image.crop((0, 80, int(places_width), image.height - 20)).convert("RGB")).median
+        assert min(places_median(before)) > 170, "Places did not follow the light theme"
         # One object covers the center of the view between Places and inspector.
         x, y = places_width + (before.width - places_width - inspector_width) / 2, before.height * .56
         uv = [x / before.width, y / before.height]
@@ -140,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         wait(dark_popup_ready).save(out / "03b-live-dark-preview.png")
         def dark_main_ready():
             image = frame()
-            return image if image and max(image.getpixel((15,75))[:3]) < 70 and max(image.getpixel((5,5))[:3]) < 70 and image.getpixel(background_pixel)[3] == 0 else None
+            return image if image and max(places_median(image)) < 70 and max(image.getpixel((5,5))[:3]) < 70 and image.getpixel(background_pixel)[3] == 0 else None
         wait(dark_main_ready).save(out / "03c-live-dark-main.png")
         def popup_click(surface, uv):
             packet([{"kind": "motion", "id": surface, "uv": uv},
@@ -253,8 +257,34 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         wait(lambda: not state().get("popups", []))
         client.terminate(); client.wait(timeout=3)
         wait(lambda: not state()["windows"] and not state().get("popups", []))
+        # Internal Trash uses the same spatial preview and a specialised native menu.
+        trash = Path(env["XDG_DATA_HOME"]) / "Trash"
+        (trash / "files").mkdir(parents=True)
+        (trash / "info").mkdir()
+        original = Path(runtime) / "restored document.txt"
+        trashed = trash / "files" / "dome-trash-test"
+        trashed.write_text("Spatial Trash preview fixture")
+        metadata = trash / "info" / "dome-trash-test.trashinfo"
+        metadata.write_text("[Trash Info]\nPath=" + urllib.parse.quote(str(original)) + "\nDeletionDate=2026-10-19T12:34:56\n")
+        with (out / "trash-client.log").open("w") as log:
+            client = subprocess.Popen([executable, "trash:/"], env=client_env, stdout=log, stderr=log)
+        wid = wait(window)["id"]
+        image = wait(frame); time.sleep(.6)
+        uv = [(places_width + (image.width - places_width - inspector_width)/2) / image.width, .56]
+        click(0x110)
+        trash_preview = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
+        wait(lambda: frame(trash_preview["id"])).save(out / "09-trash-preview.png")
+        click(0x111)
+        trash_menu = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is not None), None))
+        wait(lambda: frame(trash_menu["id"])).save(out / "10-trash-context.png")
+        key("Home"); key("Return") # First action is Restore, not Open.
+        wait(lambda: original.exists())
+        assert original.read_text() == "Spatial Trash preview fixture"
+        assert not trashed.exists() and not metadata.exists(), "Restored item or metadata remained in Trash"
+        client.terminate(); client.wait(timeout=3)
+        wait(lambda: not state()["windows"] and not state().get("popups", []))
         xd.close()
-        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup hand input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag and cleanup")
+        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup hand input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore and cleanup")
     finally:
         for process in (client, dome, xvfb):
             if process is not None:

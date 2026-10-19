@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 import QtQuick
 import QtQuick3D
+import Fsv
 
 Node {
     id: world
@@ -16,6 +17,10 @@ Node {
     position: Qt.vector3d(panX, panY, panZ)
     eulerRotation.y: yaw
     eulerRotation.x: pitch
+    function selectionTop(selection) {
+        return Qt.vector3d(selection.center.x,
+            selection.center.y + selection.extent.y / 2 + Math.min(.3, selection.extent.y / 6), selection.center.z)
+    }
     function positionForZoom(anchor, ratio) {
         // Compensate the full rotated/scaled offset, including height, so the
         // selected top stays under the same screen position during scaling.
@@ -27,11 +32,22 @@ Node {
 
     DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 1.2; ambientColor: "#8195a5" }
     Model {
-        visible: world.showBase
+        visible: world.showBase && files.layout !== "tree"
         source: "#Cube"
         y: -2
         scale: Qt.vector3d(1.72, .02, 1.32)
         materials: PrincipledMaterial { baseColor: Theme.surface; roughness: .9 }
+    }
+    TreeRoot {}
+    Model {
+        objectName: "treeConnections"
+        visible: files.layout === "tree" && files.treeBranches.length > 0
+        geometry: BranchGeometry { segments: files.treeBranches }
+        materials: PrincipledMaterial {
+            lighting: PrincipledMaterial.NoLighting
+            baseColor: "#ad5040"
+            cullMode: Material.NoCulling
+        }
     }
     Repeater3D {
         model: files
@@ -62,7 +78,7 @@ Node {
                 property int entryIndex: entry.index
                 source: "#Rectangle"
                 pickable: true
-                y: entry.extent.y / 2 + .3
+                y: entry.extent.y / 2 + Math.min(.3, entry.extent.y / 6)
                 eulerRotation.x: -90
                 eulerRotation.z: rotated ? 90 : 0
                 scale: Qt.vector3d((rotated ? entry.extent.z : entry.extent.x) * .95 / 100,

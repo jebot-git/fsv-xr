@@ -57,10 +57,21 @@ ctest --test-dir build --output-on-failure
 
 The left Places panel follows Dolphin's local bookmarks in
 `$XDG_DATA_HOME/user-places.xbel`, including their names, icons and hidden state.
-Without that file it offers the standard user folders. File System and mounted
+Without that file it offers the standard user folders. Trash opens an internal
+`trash:/` tab with 3D objects, thumbnails, original locations and deletion dates.
+It combines the home Trash and both standard Trash stores on mounted volumes
+using the [freedesktop Trash format](https://specifications.freedesktop.org/trash/latest/).
+Restore (also double-click) returns a whole file or folder to its original location;
+restore a folder before browsing its contents. Existing destinations are never
+overwritten; missing parent folders must be recreated first. Items with damaged
+metadata remain visible and can be erased, but cannot be restored automatically.
+Permanent deletion and Empty Trash require confirmation in desktop and XR menus.
+Empty Trash covers all items on currently available volumes, including items
+beyond the 2,500-item display limit; disconnected volumes are untouched.
+Trash is refreshed live and bypasses the persistent filesystem index. File System and mounted
 volumes under `/run/media`, `/media` and `/mnt` appear under Devices. Bookmarks
-and mounts update live; clicking a place navigates there. Virtual KIO locations
-(Trash, search and remote URLs) require a local mount and are omitted.
+and mounts update live; clicking a local place navigates there. Other virtual KIO
+locations (search and remote URLs) require a local mount and are omitted.
 
 Directory tabs are available on desktop and in XR. Use **+** or Ctrl+T to open
 a tab (or double-click empty space in the tab bar), Ctrl+Tab / Ctrl+Shift+Tab
@@ -86,7 +97,14 @@ freedesktop thumbnail caches and Qt's in-process image cache.
 Map, Tree, and Disc layouts preserve parent/child nesting. Map uses a squarified
 treemap with square-root size weights and a maximum sibling area contrast of
 4:1, preventing tiny files beside large ones from becoming thin strips. Height
-represents file size logarithmically. Folder platforms contain their children.
+represents file size logarithmically. In Map and Disc, folder platforms contain
+their children.
+Tree follows the original fsv's platform-and-branch structure: each directory
+gets a separate gold platform carrying its immediate file columns, and branches
+connect it to child directory platforms farther back. Sibling subtrees occupy
+separate lanes instead of being nested into a grid. The current directory also
+has a labelled root platform. Connector segments share one Vulkan mesh, and the
+overview is fitted uniformly so file tops retain their proportions.
 Scanning runs in a worker, includes hidden files, never follows directory symlinks,
 and caps each view at 2,500 entries and five levels. A visible notice reports
 truncation; open a folder to inspect it further. Directory sizes cover scanned

@@ -2,6 +2,7 @@
 #include "filesystem.h"
 #include "thumbnail.h"
 #include "gestures.h"
+#include "branchgeometry.h"
 #include <QtTest>
 #include <QQuickWindow>
 #include <QQuickItem>
@@ -11,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QPainter>
+#include <QStandardPaths>
 
 class UiTest : public QObject {
     Q_OBJECT
@@ -20,10 +22,14 @@ class UiTest : public QObject {
         return nullptr;
     }
 private slots:
-    void zoomKeepsSelectedItemAnchored() {
-        QTemporaryDir temp;
-        for (const auto &name : {"left.txt", "right.txt"}) {
-            QFile file(temp.filePath(name)); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("anchor");
+    void internalTrashInteractions() {
+        const QString trash = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Trash";
+        QVERIFY(QDir().mkpath(trash + "/files")); QVERIFY(QDir().mkpath(trash + "/info"));
+        QTemporaryDir destination;
+        for (const auto &name : {"restore.txt", "erase.txt"}) {
+            QFile file(trash + "/files/" + name); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("Trash UI fixture");
+            QFile info(trash + "/info/" + name + ".trashinfo"); QVERIFY(info.open(QIODevice::WriteOnly));
+            info.write("[Trash Info]\nPath=" + QUrl::toPercentEncoding(destination.filePath(name), "/") + "\nDeletionDate=2026-10-19T12:34:56\n");
         }
         FileSystem files;
         QQmlApplicationEngine engine;
@@ -34,15 +40,128 @@ private slots:
         engine.load(QUrl("qrc:/qml/Main.qml"));
         QVERIFY(!engine.rootObjects().isEmpty());
         auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
-        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
+        files.openPlace("trash:/"); QTRY_VERIFY(!files.busy());
         QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate(); QVERIFY(QTest::qWaitForWindowActive(window));
+        auto select = [&](const QString &name) {
+            for (int i = 0; i < files.rowCount(); ++i)
+                if (files.data(files.index(i), FileSystem::Path).toString() == trash + "/files/" + name) { files.setSelected(i); return true; }
+            return false;
+        };
+        QVERIFY(select("restore.txt"));
+        auto restore = window->findChild<QQuickItem *>("inspectorOpen"); QVERIFY(restore);
+        QTRY_COMPARE(restore->property("text").toString(), QString("Restore"));
+        QVERIFY(restore->property("enabled").toBool());
+        QTest::qWait(150);
+        QVERIFY(window->grabWindow().save("fsv-xr-trash-preview.png"));
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, restore->mapToScene(QPointF(restore->width()/2, restore->height()/2)).toPoint());
+        QTRY_VERIFY(!files.busy()); QTRY_VERIFY(QFileInfo::exists(destination.filePath("restore.txt")));
+        QVERIFY(!QFileInfo::exists(trash + "/info/restore.txt.trashinfo"));
+        QVERIFY(select("erase.txt"));
+        auto actions = window->findChild<QObject *>("fileActions"); QVERIFY(actions);
+        QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
+        auto menu = window->findChild<QObject *>("contextMenu"); QVERIFY(menu);
+        QTRY_VERIFY(menu->property("visible").toBool());
+        bool restorePresent = false, emptyPresent = false;
+        for (auto item : menu->findChildren<QQuickItem *>()) {
+            const auto text = item->property("text").toString();
+            if (text == "Restore") { QVERIFY(item->isVisible()); restorePresent = true; }
+            if (text == "Empty Trash…") { QVERIFY(item->isVisible()); emptyPresent = true; }
+            if (text == "Rename…" || text == "Move to Trash" || text == "Paste") QVERIFY(!item->isVisible());
+        }
+        QVERIFY(restorePresent); QVERIFY(emptyPresent);
+        QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+        QVERIFY(QMetaObject::invokeMethod(actions, "confirmEmptyTrash"));
+        auto empty = window->findChild<QObject *>("emptyTrashDialog"); QVERIFY(empty);
+        QTRY_VERIFY(empty->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(empty, "reject")); // Never empty any real mounted Trash during tests.
+        QVERIFY(QFileInfo::exists(trash + "/files/erase.txt"));
+        QVERIFY(QMetaObject::invokeMethod(actions, "confirmRemoval"));
+        auto confirm = window->findChild<QObject *>("confirmDeleteDialog"); QVERIFY(confirm);
+        QTRY_VERIFY(confirm->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(confirm, "reject"));
+        QVERIFY(QFileInfo::exists(trash + "/files/erase.txt"));
+        QVERIFY(QMetaObject::invokeMethod(actions, "confirmRemoval"));
+        QVERIFY(QMetaObject::invokeMethod(confirm, "accept"));
+        QTRY_VERIFY(!files.busy()); QTRY_VERIFY(!QFileInfo::exists(trash + "/files/erase.txt"));
+        QVERIFY(!QFileInfo::exists(trash + "/info/erase.txt.trashinfo"));
+        QVERIFY(!QFileInfo::exists(destination.filePath("erase.txt")));
+        window->close();
+    }
+    void treeRenderingAndPicking() {
+        QTemporaryDir temp;
+        QDir root(temp.path());
+        QVERIFY(root.mkpath("Documents/Notes")); QVERIFY(root.mkpath("Pictures")); QVERIFY(root.mkpath("Downloads"));
+        for (const auto &name : {"README.txt", "notes.txt", "Documents/design.txt", "Documents/Notes/todo.txt", "Pictures/photo.txt", "Downloads/archive.txt"}) {
+            QFile file(root.filePath(name)); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("Tree platform preview");
+        }
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.rootContext()->setContextProperty("xrMode", false);
+        engine.rootContext()->setContextProperty("domeMode", false);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy()); files.setLayout("tree");
+        QVERIFY(QTest::qWaitForWindowExposed(window)); QTest::qWait(500);
+        auto connections = window->findChild<QObject *>("treeConnections"); QVERIFY(connections);
+        QVERIFY(connections->property("visible").toBool());
+        auto world = window->findChild<QObject *>("filesystemWorld"); QVERIFY(world);
+        auto view = window->findChild<QQuickItem *>("filesystemView"); QVERIFY(view);
+        int selected = -1;
+        for (int i = 0; i < files.rowCount(); ++i)
+            if (files.data(files.index(i), FileSystem::Path).toString() == root.filePath("Documents/design.txt")) selected = i;
+        QVERIFY(selected >= 0);
+        const auto center = files.data(files.index(selected), FileSystem::Center).value<QVector3D>();
+        const auto extent = files.data(files.index(selected), FileSystem::Extent).value<QVector3D>();
+        QVector3D scene, point;
+        QVERIFY(QMetaObject::invokeMethod(world, "mapPositionToScene", Q_RETURN_ARG(QVector3D, scene), Q_ARG(QVector3D, center + QVector3D(0, extent.y()/2 + .1, 0))));
+        QVERIFY(QMetaObject::invokeMethod(view, "mapFrom3DScene", Q_RETURN_ARG(QVector3D, point), Q_ARG(QVector3D, scene)));
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, view->mapToScene(QPointF(point.x(), point.y())).toPoint());
+        QTRY_COMPARE(files.selected(), selected);
+        const auto frame = window->grabWindow(); QVERIFY(!frame.isNull());
+        QVERIFY(frame.save("fsv-xr-tree-preview.png"));
+        int branchPixels = 0;
+        for (int y = 100; y < frame.height() - 30; ++y) for (int x = 210; x < frame.width() - 320; ++x) {
+            const auto color = frame.pixelColor(x, y);
+            if (color.red() > 140 && color.green() < 120 && color.blue() > 35
+                && color.red() > color.green()*1.7 && color.green() > color.blue()*1.05) ++branchPixels;
+        }
+        QVERIFY2(branchPixels > 20, "Tree connector mesh was not rendered");
+    }
+    void zoomKeepsSelectedItemAnchored_data() {
+        QTest::addColumn<QString>("layout");
+        QTest::newRow("map") << QString("map");
+        QTest::newRow("tree") << QString("tree");
+    }
+    void zoomKeepsSelectedItemAnchored() {
+        QFETCH(QString, layout);
+        QTemporaryDir temp;
+        for (const auto &name : {"left.txt", "right.txt"}) {
+            QFile file(temp.filePath(name)); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("anchor");
+        }
+        if (layout == "tree") for (int i = 0; i < 8; ++i) QVERIFY(QDir(temp.path()).mkdir(QString("Directory%1").arg(i)));
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.rootContext()->setContextProperty("xrMode", false);
+        engine.rootContext()->setContextProperty("domeMode", false);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy()); files.setLayout(layout);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate(); QVERIFY(QTest::qWaitForWindowActive(window));
         window->setProperty("yaw", 31.); window->setProperty("pitch", 18.);
         window->setProperty("panX", 7.); window->setProperty("panY", 3.); window->setProperty("panZ", -5.);
         window->setProperty("zoom", 1.6);
         files.setSelected(0);
         const auto center = files.selection()["center"].value<QVector3D>();
         const auto size = files.selection()["extent"].value<QVector3D>();
-        const QVector3D anchor = center + QVector3D(0, size.y()/2 + .3, 0);
+        const QVector3D anchor = center + QVector3D(0, size.y()/2 + qMin(.3f, size.y()/6), 0);
         auto world = window->findChild<QObject *>("filesystemWorld"); QVERIFY(world);
         auto view = window->findChild<QQuickItem *>("filesystemView"); QVERIFY(view);
         auto position = [&] {
@@ -65,12 +184,19 @@ private slots:
         QVERIFY(qAbs(window->property("zoom").toReal() - 1.6) < .0001);
         QVERIFY((position() - before).length() < .001);
         auto navigation = window->findChild<QQuickItem *>("navigationMouse"); QVERIFY(navigation);
-        QTest::mouseClick(window, Qt::MiddleButton, Qt::NoModifier, point);
+        auto middleClick = [&] {
+            // Keep cursor warps from a previous native window out of this
+            // gesture. Deliver the same seat press/release directly.
+            QMouseEvent press(QEvent::MouseButtonPress, point, window->mapToGlobal(point), Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, point, window->mapToGlobal(point), Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &press); QCoreApplication::sendEvent(window, &release);
+        };
+        middleClick();
         QVERIFY(navigation->property("scrollMode").toBool());
         QMouseEvent move(QEvent::MouseMove, point - QPoint(0, 30), window->mapToGlobal(point - QPoint(0, 30)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
         QCoreApplication::sendEvent(window, &move);
         QVERIFY(window->property("zoom").toReal() > 1.6);
-        QTest::mouseClick(window, Qt::MiddleButton, Qt::NoModifier, point);
+        middleClick();
         QTest::qWait(50); QVERIFY((position() - before).length() < .001);
         for (int delta : {120000, 120000, -120000, -120000}) {
             wheel(delta); QTest::qWait(20);
@@ -269,11 +395,13 @@ private slots:
 #endif
 };
 int main(int argc, char **argv) {
-    QTemporaryDir cache;
+    QTemporaryDir cache, data;
     qputenv("XDG_CACHE_HOME", cache.path().toUtf8());
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
     qputenv("QSG_RHI_BACKEND", "vulkan");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
     QGuiApplication app(argc, argv);
+    qmlRegisterType<BranchGeometry>("Fsv", 1, 0, "BranchGeometry");
     UiTest tests;
     return QTest::qExec(&tests, argc, argv);
 }

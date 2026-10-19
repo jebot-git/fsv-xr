@@ -41,8 +41,7 @@ XrView {
         const target = Math.max(.1, Math.min(3, zoom * Math.exp(delta)))
         if (target === zoom) return
         const selection = files.selection
-        const position = files.selected < 0 ? null : world.positionForZoom(
-            Qt.vector3d(selection.center.x, selection.center.y + selection.extent.y / 2 + .3, selection.center.z), target / zoom)
+        const position = files.selected < 0 ? null : world.positionForZoom(world.selectionTop(selection), target / zoom)
         restoringView = true
         if (position) { panX = position.x; panY = position.y - 85; panZ = position.z + 140 }
         zoom = target
@@ -82,8 +81,7 @@ XrView {
         id: preview
         position: {
             if (files.selected < 0) return Qt.vector3d(0, 0, 0)
-            const center = files.selection.center, extent = files.selection.extent
-            const top = world.mapPositionToScene(Qt.vector3d(center.x, center.y + extent.y / 2, center.z))
+            const top = world.mapPositionToScene(world.selectionTop(files.selection))
             return top.plus(Qt.vector3d(-14.4, 44, 8))
         }
         onRequestActions: controls.show(8, 40)
@@ -117,6 +115,7 @@ XrView {
                     Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Refresh"; enabled: !files.operating; onClicked: files.refresh() }
                     ComboBox { palette: Theme.controlPalette(Theme.paletteRevision); model: ["map", "tree", "disc"]; currentIndex: ["map", "tree", "disc"].indexOf(files.layout); onActivated: files.layout = currentText }
                 }
+                Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: controls.confirmEmptyTrash() }
                 Inspector { Layout.fillWidth: true; Layout.fillHeight: true; onRequestAction: controls.show(8, 40) }
                 RowLayout {
                     Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "− Zoom"; onClicked: view.changeZoom(-Math.log(1.2)) }

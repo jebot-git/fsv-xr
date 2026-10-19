@@ -45,14 +45,14 @@ ThemedPanel {
                 icon.width: 20; icon.height: 20
                 highlighted: panel.currentPlace === index
                 enabled: !files.operating
-                onClicked: files.navigate(modelData.path)
+                onClicked: files.openPlace(modelData.path)
                 ToolTip.visible: hovered
                 ToolTip.text: modelData.path
                 ToolTip.delay: 700
                 MouseArea {
                     anchors.fill: parent
                     acceptedButtons: Qt.MiddleButton
-                    onClicked: files.newTab(modelData.path)
+                    onClicked: files.openPlace(modelData.path, true)
                 }
             }
         }

@@ -7,6 +7,7 @@
 <file alias="Tabs.qml">qml/Tabs.qml</file>
 <file alias="Main.qml">qml/Main.qml</file>
 <file alias="World.qml">qml/World.qml</file>
+<file alias="TreeRoot.qml">qml/TreeRoot.qml</file>
 <file alias="Inspector.qml">qml/Inspector.qml</file>
 <file alias="FileActions.qml">qml/FileActions.qml</file>
 <file alias="Xr.qml">qml/Xr.qml</file>

@@ -116,18 +116,22 @@ void DomeWindow::showPreview(const QPointF &anchor)
     auto *image = label("Loading preview…");
     image->setFixedSize(316, 140);
     image->setAlignment(Qt::AlignCenter);
-    label(selection.value("mime").toString() + "\n" + QLocale().toString(selection.value("bytes").toLongLong()) + " bytes\nModified: "
+    label(selection.value("mime").toString() + "\n" + (m_files->inTrash() && selection.value("directory").toBool() ? QString("Folder") : QLocale().toString(selection.value("bytes").toLongLong()) + " bytes") + "\nModified: "
           + selection.value("modified").toString() + "\nOwner: " + selection.value("owner").toString()
           + (selection.value("symlink").toBool() ? "\nSymbolic link" : ""));
+    if (selection.value("trashed").toBool())
+        label("Original location: " + selection.value("originalPath").toString() + "\nDeleted: " + selection.value("deleted").toString());
     auto *path = label(selection.value("path").toString());
     path->setMaximumHeight(60);
     path->setToolTip(selection.value("path").toString());
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
-    auto *open = buttons->addButton("Open", QDialogButtonBox::AcceptRole);
+    auto *open = buttons->addButton(m_files->inTrash() ? "Restore" : "Open", QDialogButtonBox::AcceptRole);
+    open->setEnabled(!m_files->inTrash() || selection.value("canRestore").toBool());
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, panel, &QDialog::reject);
-    connect(open, &QPushButton::clicked, panel, [this, panel] {
-        panel->close(); m_files->open(m_files->selected());
+    connect(open, &QPushButton::clicked, panel, [this, panel, selection] {
+        panel->close();
+        if (m_files->selection().value("path") == selection.value("path")) m_files->open(m_files->selected());
     });
     const QString id = selection.value("thumbnail").toString().mid(QString("image://thumbnail/").size());
     auto *watcher = new QFutureWatcher<QImage>(panel);
@@ -171,6 +175,17 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
             if (actions) QMetaObject::invokeMethod(actions, "edit", Q_ARG(QVariant, operation));
         });
     };
+    if (m_files->inTrash()) {
+        item("Restore", selected && m_files->selection().value("canRestore").toBool(), [this] { m_files->restore(); });
+        item("Empty Trash…", true, [this] {
+            QTimer::singleShot(0, this, [this] {
+                auto *actions = m_scene.rootObject()->findChild<QObject *>("fileActions");
+                if (actions) QMetaObject::invokeMethod(actions, "confirmEmptyTrash");
+            });
+        });
+        item("Copy Location", selected, [this] { m_files->copyLocation(); });
+        menu->addSeparator();
+    } else {
     item("Open", selected, [this] { m_files->open(m_files->selected()); });
     item("Open in New Tab", selected && m_files->selection().value("directory").toBool(), [this] { m_files->newTab(m_files->selection().value("path").toString()); });
     item("Open With…", selected && !m_files->selection().value("directory").toBool(), [edit] { edit("openWith"); });
@@ -182,6 +197,7 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     menu->addSeparator();
     item("Rename…", selected, [edit] { edit("rename"); });
     item("Move to Trash", selected, [this] { m_files->remove(false); });
+    }
     item("Delete Permanently…", selected, [this] {
         QTimer::singleShot(0, this, [this] {
             if (m_preview) m_preview->close();
@@ -190,8 +206,10 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
         });
     });
     menu->addSeparator();
+    if (!m_files->inTrash()) {
     item("Create Folder…", true, [edit] { edit("mkdir"); });
     item("Open Terminal Here", true, [this] { m_files->terminal(); });
+    }
     item("Properties", selected, [this] {
         QTimer::singleShot(0, this, [this] {
             QMetaObject::invokeMethod(m_scene.rootObject(), "previewSelection");

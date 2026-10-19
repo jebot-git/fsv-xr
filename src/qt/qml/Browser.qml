@@ -43,8 +43,7 @@ ThemedPanel {
     }
     function previewSelection() {
         if (!spatialPopups || files.selected < 0) return
-        const center = files.selection.center, extent = files.selection.extent
-        const top = world.mapPositionToScene(Qt.vector3d(center.x, center.y + extent.y / 2 + .3, center.z))
+        const top = world.mapPositionToScene(world.selectionTop(files.selection))
         const projected = view.mapFrom3DScene(top)
         if (projected.z > 0) previewRequested(view.mapToItem(window, projected.x, projected.y))
     }
@@ -52,8 +51,7 @@ ThemedPanel {
         const target = Math.max(.15, Math.min(8, zoom * Math.exp(delta)))
         if (target === zoom) return
         const selection = files.selection
-        const position = files.selected < 0 ? null : world.positionForZoom(
-            Qt.vector3d(selection.center.x, selection.center.y + selection.extent.y / 2 + .3, selection.center.z), target / zoom)
+        const position = files.selected < 0 ? null : world.positionForZoom(world.selectionTop(selection), target / zoom)
         restoringView = true
         if (position) { panX = position.x; panY = position.y; panZ = position.z }
         zoom = target
@@ -70,6 +68,7 @@ ThemedPanel {
             Label { palette: Theme.controlPalette(Theme.paletteRevision); text: " fsv-xr "; font.bold: true; font.pixelSize: 22 }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
+            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
             TextField { palette: Theme.controlPalette(Theme.paletteRevision); id: location; objectName: "locationField"; Layout.fillWidth: true; text: files.root; onAccepted: files.navigate(text) }
             ComboBox { palette: Theme.controlPalette(Theme.paletteRevision);
                 model: ["Map", "Tree", "Disc"]
@@ -197,7 +196,7 @@ ThemedPanel {
     Shortcut { sequence: "Ctrl+X"; onActivated: files.clipboard(true) }
     Shortcut { sequence: "Ctrl+V"; onActivated: files.paste() }
     Shortcut { sequence: "F2"; onActivated: actions.edit("rename") }
-    Shortcut { sequence: "Delete"; onActivated: files.remove(false) }
+    Shortcut { sequence: "Delete"; onActivated: { if (files.inTrash) actions.confirmRemoval(); else files.remove(false) } }
     Shortcut { sequence: "Ctrl+Shift+N"; onActivated: actions.edit("mkdir") }
     Shortcut { sequence: "Alt+Up"; onActivated: files.up() }
     Shortcut { sequence: "F5"; onActivated: files.refresh() }

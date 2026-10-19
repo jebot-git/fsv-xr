@@ -12,6 +12,8 @@
 
 struct Entry {
     QString path, name, mime;
+    QString trashDirectory, trashTop, originalPath, deletionDate;
+    bool trashHome = false;
     qint64 bytes = 0;
     qint64 modifiedMs = 0;
     bool directory = false, symlink = false;
@@ -30,6 +32,7 @@ public:
 class FileSystem : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString root READ root NOTIFY rootChanged)
+    Q_PROPERTY(bool inTrash READ inTrash NOTIFY rootChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString warning READ warning NOTIFY warningChanged)
     Q_PROPERTY(int selected READ selected WRITE setSelected NOTIFY selectedChanged)
@@ -41,6 +44,8 @@ class FileSystem : public QAbstractListModel {
     Q_PROPERTY(QVariantMap viewState READ viewState WRITE setViewState NOTIFY viewStateChanged)
     Q_PROPERTY(bool operating READ operating NOTIFY busyChanged)
     Q_PROPERTY(bool cached READ cached NOTIFY busyChanged)
+    Q_PROPERTY(QVariantMap treeRoot READ treeRoot NOTIFY treeGeometryChanged)
+    Q_PROPERTY(QVariantList treeBranches READ treeBranches NOTIFY treeGeometryChanged)
 public:
     enum Role { Path = Qt::UserRole + 1, Name, Mime, Bytes, Directory, Center, Extent, Tint, Thumbnail, Depth };
     explicit FileSystem(QObject *parent = nullptr);
@@ -49,6 +54,7 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
     QString root() const { return m_root; }
+    bool inTrash() const { return m_root == "trash:/"; }
     bool busy() const { return m_scanning || m_operating; }
     bool operating() const { return m_operating; }
     bool cached() const { return m_cached; }
@@ -60,6 +66,9 @@ public:
     void setLayout(const QString &value);
     QVariantList places() const { return m_places; }
     static QVariantList readPlaces(const QString &bookmarkFile, bool includeDevices = true);
+    QVariantMap treeRoot() const { return m_treeRoot; }
+    QVariantList treeBranches() const { return m_treeBranches; }
+    Q_INVOKABLE void openPlace(const QString &path, bool inNewTab = false);
     QVariantList tabs() const;
     int currentTab() const { return m_currentTab; }
     QVariantMap viewState() const;
@@ -78,6 +87,8 @@ public:
     Q_INVOKABLE void rename(const QString &name);
     Q_INVOKABLE void newFolder(const QString &name);
     Q_INVOKABLE void remove(bool permanently = false);
+    Q_INVOKABLE void restore();
+    Q_INVOKABLE void emptyTrash();
     Q_INVOKABLE void copyLocation();
     Q_INVOKABLE void terminal();
     static ScanResult scan(const QString &root, const std::shared_ptr<std::atomic_bool> &cancel,
@@ -95,9 +106,11 @@ signals:
     void currentTabChanged();
     void viewStateChanged();
     void indexRestored();
+    void treeGeometryChanged();
     void error(const QString &message);
 private:
     void arrange();
+    void arrangeTree();
     void reloadPlaces();
     void requestScan(bool useIndex);
     void launchScan();
@@ -115,6 +128,8 @@ private:
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_placesWatcher;
     QVariantList m_places;
+    QVariantMap m_treeRoot;
+    QVariantList m_treeBranches;
     struct Tab {
         QString root, layout = "map";
         ScanResult snapshot;

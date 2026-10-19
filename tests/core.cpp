@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
+#include "trash.h"
 #include "gestures.h"
 #include "thumbnail.h"
+#include <QDesktopServices>
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -10,6 +12,8 @@
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QElapsedTimer>
+#include <QRectF>
+#include <QStandardPaths>
 
 class CoreTest : public QObject {
     Q_OBJECT
@@ -24,6 +28,56 @@ class CoreTest : public QObject {
         return joints;
     }
 private slots:
+    void treePlatformsAndConnections() {
+        QTemporaryDir temp;
+        QDir root(temp.path());
+        QVERIFY(root.mkpath("A/Child")); QVERIFY(root.mkdir("B"));
+        for (const auto &path : {"root.txt", "A/a.txt", "A/Child/deep.txt", "B/b.txt"}) put(root.filePath(path));
+        FileSystem model;
+        model.navigate(temp.path()); QTRY_VERIFY(!model.busy());
+        model.setLayout("tree");
+        QCOMPARE(model.treeRoot()["path"].toString(), temp.path());
+        QVERIFY(!model.treeBranches().isEmpty());
+        QHash<QString, int> byPath;
+        for (int i = 0; i < model.rowCount(); ++i) byPath.insert(model.data(model.index(i), FileSystem::Path).toString(), i);
+        auto center = [&](int i) { return i < 0 ? model.treeRoot()["center"].value<QVector3D>() : model.data(model.index(i), FileSystem::Center).value<QVector3D>(); };
+        auto extent = [&](int i) { return i < 0 ? model.treeRoot()["extent"].value<QVector3D>() : model.data(model.index(i), FileSystem::Extent).value<QVector3D>(); };
+        QList<QRectF> platforms;
+        const auto rc = center(-1), re = extent(-1);
+        platforms.append(QRectF(rc.x() - re.x()/2, rc.z() - re.z()/2, re.x(), re.z()));
+        for (int i = 0; i < model.rowCount(); ++i) {
+            const auto path = model.data(model.index(i), FileSystem::Path).toString();
+            const int parent = byPath.value(QFileInfo(path).path(), -1);
+            const auto c = center(i), e = extent(i), pc = center(parent), pe = extent(parent);
+            if (model.data(model.index(i), FileSystem::Directory).toBool()) {
+                QVERIFY(c.z() + e.z()/2 < pc.z() - pe.z()/2);
+                bool connected = false;
+                for (const auto &value : model.treeBranches()) {
+                    const auto segment = value.toMap();
+                    if (segment["child"].toInt() != i) continue;
+                    QCOMPARE(segment["parent"].toInt(), parent);
+                    QVERIFY((segment["to"].value<QVector3D>() - QVector3D(c.x(), c.y(), c.z() + e.z()/2)).length() < .001);
+                    connected = true;
+                }
+                QVERIFY(connected);
+                const QRectF rect(c.x() - e.x()/2, c.z() - e.z()/2, e.x(), e.z());
+                for (const auto &other : platforms) QVERIFY(!rect.intersects(other));
+                platforms << rect;
+            } else {
+                QVERIFY(c.x() - e.x()/2 >= pc.x() - pe.x()/2);
+                QVERIFY(c.x() + e.x()/2 <= pc.x() + pe.x()/2);
+                QVERIFY(c.z() - e.z()/2 >= pc.z() - pe.z()/2);
+                QVERIFY(c.z() + e.z()/2 <= pc.z() + pe.z()/2);
+                QVERIFY(c.y() - e.y()/2 >= pc.y() + pe.y()/2 - .001);
+                QCOMPARE(e.x(), e.z());
+            }
+        }
+        model.setLayout("map"); QVERIFY(model.treeBranches().isEmpty()); QVERIFY(model.treeRoot().isEmpty());
+        QTemporaryDir empty;
+        model.setLayout("tree"); model.navigate(empty.path()); QTRY_VERIFY(!model.busy());
+        QCOMPARE(model.treeRoot()["path"].toString(), empty.path());
+        QCOMPARE(model.rowCount(), 0); QVERIFY(model.treeBranches().isEmpty());
+    }
     void directoryIndexAndLiveValidation() {
         QTemporaryDir temp, cache;
         put(temp.filePath("stale.txt")); put(temp.filePath("keep.txt"));
@@ -96,6 +150,94 @@ private slots:
         QCOMPARE(model.root(), second.path()); QCOMPARE(model.tabs().size(), 1);
         model.closeTab(0); QCOMPARE(model.tabs().size(), 1);
     }
+    void trashManagement() {
+        QTemporaryDir temp;
+        QDir dir(temp.path());
+        QVERIFY(dir.mkpath("Trash/files")); QVERIFY(dir.mkpath("Trash/info"));
+        QVERIFY(dir.mkdir("original"));
+        TrashLocation location{dir.filePath("Trash"), temp.path(), true};
+        auto record = [&](const QString &id, const QString &original) {
+            put(dir.filePath("Trash/info/" + id + ".trashinfo"), "[Trash Info]\nPath="
+                + QUrl::toPercentEncoding(original, "/") + "\nDeletionDate=2026-10-19T12:34:56\n");
+        };
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const QString original = dir.filePath("original/space #漢字.txt");
+        put(dir.filePath("Trash/files/collision.1")); record("collision.1", original);
+        auto scan = TrashStore::scan({location}, cancel);
+        QCOMPARE(scan.entries.size(), 1);
+        const auto entry = scan.entries.first();
+        QCOMPARE(entry.name, QString("space #漢字.txt"));
+        QCOMPARE(entry.originalPath, original);
+        QCOMPARE(entry.deletionDate, QString("2026-10-19T12:34:56"));
+        put(original, "keep me");
+        QVERIFY(!TrashStore::restore(entry).isEmpty()); // Never overwrite, including dangling symlinks.
+        QFile preserved(original); QVERIFY(preserved.open(QIODevice::ReadOnly)); QCOMPARE(preserved.readAll(), QByteArray("keep me")); preserved.close();
+        QVERIFY(QFile::remove(original));
+        QVERIFY(QFile::link(dir.filePath("nonexistent"), original));
+        QVERIFY(!TrashStore::restore(entry).isEmpty()); QVERIFY(QFileInfo(original).isSymLink());
+        QVERIFY(QFile::remove(original));
+        QVERIFY2(TrashStore::restore(entry).isEmpty(), "Restore failed");
+        QVERIFY(QFileInfo::exists(original)); QVERIFY(!QFileInfo::exists(entry.path));
+        QVERIFY(!QFileInfo::exists(dir.filePath("Trash/info/collision.1.trashinfo")));
+        QVERIFY(!TrashStore::restore(entry).isEmpty()); // Stale selection.
+        QVERIFY(dir.mkpath("Trash/files/folder/nested")); put(dir.filePath("Trash/files/folder/nested/a"));
+        record("folder", dir.filePath("original/folder"));
+        scan = TrashStore::scan({location}, cancel);
+        QCOMPARE(scan.entries.size(), 1); QVERIFY(scan.entries.first().directory); // One restorable item per tree.
+        QVERIFY(TrashStore::restore(scan.entries.first()).isEmpty());
+        QVERIFY(QFileInfo::exists(dir.filePath("original/folder/nested/a")));
+        put(dir.filePath("Trash/files/missing-parent")); record("missing-parent", dir.filePath("gone/file"));
+        scan = TrashStore::scan({location}, cancel);
+        QVERIFY(!TrashStore::restore(scan.entries.first()).isEmpty());
+        QVERIFY(QFileInfo::exists(scan.entries.first().path));
+        // Mounted-volume paths are relative to the mount root, with no traversal allowed.
+        location.home = false;
+        put(dir.filePath("Trash/files/relative")); record("relative", "original/relative.txt");
+        put(dir.filePath("Trash/files/unsafe")); record("unsafe", "../outside");
+        put(dir.filePath("Trash/files/orphan"));
+        put(dir.filePath("Trash/files/symlink-info"));
+        QVERIFY(QFile::link(original, dir.filePath("Trash/info/symlink-info.trashinfo")));
+        scan = TrashStore::scan({location}, cancel);
+        QVERIFY(!scan.warning.isEmpty());
+        int restorable = 0;
+        for (const auto &e : scan.entries) {
+            if (!e.originalPath.isEmpty()) { ++restorable; QCOMPARE(e.originalPath, dir.filePath("original/relative.txt")); }
+            if (e.name == "unsafe" || e.name == "orphan" || e.name == "symlink-info") QVERIFY(e.originalPath.isEmpty());
+        }
+        QCOMPARE(restorable, 1);
+        // Empty does not follow links to surviving files or directories.
+        QVERIFY(QFile::link(dir.filePath("original"), dir.filePath("Trash/files/directory-link")));
+        const auto limited = TrashStore::scan({location}, cancel, 1);
+        QCOMPARE(limited.entries.size(), 1); QVERIFY(!limited.warning.isEmpty());
+        QVERIFY(TrashStore::empty({location}).isEmpty());
+        QCOMPARE(TrashStore::scan({location}, cancel).entries.size(), 0);
+        QVERIFY(QFileInfo::exists(original)); QVERIFY(QFileInfo::exists(dir.filePath("original/folder/nested/a")));
+        // Neither scanning nor erasing accepts a symlink substituted for the store.
+        QVERIFY(QDir(dir.filePath("Trash")).removeRecursively());
+        QVERIFY(QFile::link(dir.filePath("original"), dir.filePath("Trash")));
+        QCOMPARE(TrashStore::scan({location}, cancel).entries.size(), 0);
+    }
+    void internalTrashModel() {
+        const QString trash = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Trash";
+        QVERIFY(QDir().mkpath(trash + "/files")); QVERIFY(QDir().mkpath(trash + "/info"));
+        QTemporaryDir destination;
+        const auto original = destination.filePath("restored.txt");
+        put(trash + "/files/model-test", "preview content");
+        put(trash + "/info/model-test.trashinfo", "[Trash Info]\nPath=" + QUrl::toPercentEncoding(original, "/") + "\nDeletionDate=2026-10-19T12:34:56\n");
+        FileSystem model;
+        model.navigate("trash:/"); QTRY_VERIFY(!model.busy());
+        int index = -1;
+        for (int i = 0; i < model.rowCount(); ++i) if (model.data(model.index(i), FileSystem::Path).toString() == trash + "/files/model-test") index = i;
+        QVERIFY(index >= 0); model.setSelected(index);
+        QCOMPARE(model.selection()["name"].toString(), QString("restored.txt"));
+        QCOMPARE(model.selection()["originalPath"].toString(), original);
+        QVERIFY(model.selection()["trashed"].toBool()); QVERIFY(model.selection()["canRestore"].toBool());
+        QVERIFY(!model.canPaste());
+        model.rename("wrong"); model.newFolder("wrong"); model.remove(false);
+        QVERIFY(QFileInfo::exists(trash + "/files/model-test"));
+        model.restore(); QTRY_VERIFY(!model.busy());
+        QVERIFY(QFileInfo::exists(original)); QVERIFY(!QFileInfo::exists(trash + "/files/model-test"));
+    }
     void sharedLocalPlaces() {
         QTemporaryDir temp;
         QDir root(temp.path());
@@ -110,10 +252,23 @@ private slots:
             + "<bookmark href=\"trash:/\"><title>Trash</title></bookmark>"
             + "<bookmark href=\"sftp://host/data\"><title>Remote</title></bookmark></xbel>").toUtf8());
         const auto places = FileSystem::readPlaces(xbel, false);
-        QCOMPARE(places.size(), 1);
+        QCOMPARE(places.size(), 2);
         QCOMPARE(places[0].toMap()["path"].toString(), target);
         QCOMPARE(places[0].toMap()["name"].toString(), QString("Shared bookmark"));
         QCOMPARE(places[0].toMap()["icon"].toString(), QString("folder-pictures"));
+        QCOMPARE(places[1].toMap()["path"].toString(), QString("trash:/"));
+        FileSystem model;
+        model.openPlace("trash:/");
+        QTRY_VERIFY(!model.busy());
+        QVERIFY(model.inTrash());
+        QCOMPARE(model.root(), QString("trash:/"));
+        model.openPlace("trash:/", true);
+        QTRY_VERIFY(!model.busy());
+        QCOMPARE(model.tabs().size(), 2);
+        QCOMPARE(model.tabs()[1].toMap()["title"].toString(), QString("Trash"));
+        model.navigate(target);
+        QTRY_VERIFY(!model.busy());
+        QVERIFY(!model.inTrash());
         put(xbel, "<xbel>");
         QVERIFY(!FileSystem::readPlaces(xbel, false).isEmpty());
     }
@@ -253,8 +408,9 @@ private slots:
     }
 };
 int main(int argc, char **argv) {
-    QTemporaryDir cache;
+    QTemporaryDir cache, data;
     qputenv("XDG_CACHE_HOME", cache.path().toUtf8());
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
     QGuiApplication app(argc, argv);
     CoreTest tests;
     return QTest::qExec(&tests, argc, argv);

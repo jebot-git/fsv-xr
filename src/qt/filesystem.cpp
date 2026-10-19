@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
 #include "thumbnail.h"
+#include "trash.h"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QClipboard>
 #include <QColor>
@@ -30,7 +31,10 @@ FileSystem::FileSystem(QObject *parent) : QAbstractListModel(parent)
     connect(&m_placesWatcher, &QFileSystemWatcher::directoryChanged, this, &FileSystem::reloadPlaces);
     auto placesTimer = new QTimer(this);
     placesTimer->setInterval(5000);
-    connect(placesTimer, &QTimer::timeout, this, &FileSystem::reloadPlaces);
+    connect(placesTimer, &QTimer::timeout, this, [this] {
+        reloadPlaces();
+        if (inTrash() && !busy()) refresh();
+    });
     placesTimer->start();
     connect(&m_scan, &QFutureWatcher<ScanResult>::finished, this, [this] {
         m_inFlight = false;
@@ -106,7 +110,7 @@ QVariantList FileSystem::readPlaces(const QString &bookmarkFile, bool includeDev
             {"path", clean}, {"icon", icon.isEmpty() ? QStringLiteral("folder") : icon}, {"group", group}});
     };
     QFile file(bookmarkFile);
-    bool loaded = false;
+    bool loaded = false, trashAdded = false, trashHidden = false;
     if (file.open(QIODevice::ReadOnly) && file.size() <= 4 * 1024 * 1024) {
         QXmlStreamReader xml(&file);
         bool xbel = false;
@@ -133,13 +137,20 @@ QVariantList FileSystem::readPlaces(const QString &bookmarkFile, bool includeDev
                     else privateEntry = !value.isEmpty() && value != "fsv-xr";
                 }
             }
-            // The filesystem renderer works on local directories. Virtual KIO
-            // locations (trash, search, remote URLs) are not local directories.
+            if (url.scheme() == "trash" && !privateEntry) {
+                trashHidden = hidden;
+                if (!hidden && !trashAdded) {
+                    result.append(QVariantMap{{"name", title.isEmpty() ? tr("Trash") : title},
+                        {"path", "trash:/"}, {"icon", "user-trash"}, {"group", tr("Places")}});
+                    trashAdded = true;
+                }
+            }
+            // Other virtual KIO locations are not local directories.
             if (url.isLocalFile() && !hidden && !privateEntry)
                 add(title, url.toLocalFile(), icon, tr("Places"));
         }
         loaded = xbel && !xml.hasError();
-        if (!loaded) { result.clear(); seen.clear(); }
+        if (!loaded) { result.clear(); seen.clear(); trashAdded = false; trashHidden = false; }
     }
     if (!loaded) {
         add(tr("Home"), QDir::homePath(), "user-home", tr("Places"));
@@ -150,6 +161,8 @@ QVariantList FileSystem::readPlaces(const QString &bookmarkFile, bool includeDev
         for (const auto &place : defaults)
             add(QStandardPaths::displayName(place.first), QStandardPaths::writableLocation(place.first), place.second, tr("Places"));
     }
+    if (!trashAdded && !trashHidden)
+        result.append(QVariantMap{{"name", tr("Trash")}, {"path", "trash:/"}, {"icon", "user-trash"}, {"group", tr("Places")}});
     if (includeDevices) {
         add(tr("File System"), QDir::rootPath(), "drive-harddisk", tr("Devices"));
         for (const auto &volume : QStorageInfo::mountedVolumes()) {
@@ -161,6 +174,12 @@ QVariantList FileSystem::readPlaces(const QString &bookmarkFile, bool includeDev
         }
     }
     return result;
+}
+
+void FileSystem::openPlace(const QString &path, bool inNewTab)
+{
+    if (inNewTab) newTab(path);
+    else navigate(path);
 }
 
 void FileSystem::reloadPlaces()
@@ -223,8 +242,10 @@ ScanResult FileSystem::scan(const QString &root, const std::shared_ptr<std::atom
 
 void FileSystem::arrange()
 {
+    m_treeRoot.clear(); m_treeBranches.clear();
     QList<QList<int>> children(m_entries.size() + 1);
     for (int i = 0; i < m_entries.size(); ++i) children[m_entries[i].parent + 1] << i;
+    if (m_layout == "tree") { arrangeTree(); emit treeGeometryChanged(); return; }
     std::function<void(int, float, float, float, float, float)> place =
         [&](int parent, float x, float z, float w, float d, float base) {
         const auto &list = children[parent + 1];
@@ -274,14 +295,10 @@ void FileSystem::arrange()
             }
             if (!row.isEmpty()) placeRow();
         }
-        const int grid = qCeil(std::sqrt(double(list.size())));
         for (int j = 0; j < list.size(); ++j) {
             const int i = list[j]; auto &e = m_entries[i];
             float ew, ed, ex, ez;
-            if (m_layout == "tree") {
-                ew = w / grid; ed = d / grid;
-                ex = x + (j % grid) * ew; ez = z + (j / grid) * ed;
-            } else if (m_layout == "disc") {
+            if (m_layout == "disc") {
                 const float a = 6.2831853f * j / list.size();
                 const float radius = qMin(w, d) * .34f;
                 ew = ed = qMin(w, d) / (2.5f + std::sqrt(float(list.size())) * 1.5f);
@@ -298,6 +315,7 @@ void FileSystem::arrange()
         }
     };
     place(-1, -80, -60, 160, 120, 0);
+    emit treeGeometryChanged();
 }
 void FileSystem::setLayout(const QString &value)
 {
@@ -309,10 +327,11 @@ void FileSystem::setLayout(const QString &value)
 void FileSystem::navigate(const QString &path)
 {
     const QFileInfo info(QUrl(path).isLocalFile() ? QUrl(path).toLocalFile() : path);
-    if (!info.isDir() || !info.isReadable()) { emit error("Cannot read directory: " + path); return; }
+    if (path != "trash:/" && (!info.isDir() || !info.isReadable())) { emit error("Cannot read directory: " + path); return; }
     if (m_operating) { emit error("Wait for the current operation to finish."); return; }
-    if (m_root == info.absoluteFilePath()) { refresh(); return; }
-    m_root = info.absoluteFilePath();
+    const QString target = path == "trash:/" ? path : info.absoluteFilePath();
+    if (m_root == target) { refresh(); return; }
+    m_root = target;
     m_tabs[m_currentTab].root = m_root;
     m_tabs[m_currentTab].loaded = false;
     m_selected = -1;
@@ -352,6 +371,7 @@ void FileSystem::launchScan()
                 if (indexed) emit indexRestored();
             }, Qt::QueuedConnection);
         };
+        if (root == "trash:/") return TrashStore::scan(TrashStore::locations(), cancel);
         bool restored = haveScene;
         if (useIndex && !haveScene && !*cancel) {
             if (auto snapshot = FileIndex::load(root, directory)) { publish(*snapshot, true); restored = true; }
@@ -365,10 +385,12 @@ void FileSystem::launchScan()
 void FileSystem::applyResult(const ScanResult &result, bool cached, bool watchChildren)
 {
     const QString selection = selectedPath();
-    bool changed = result.entries.size() != m_entries.size();
+    bool changed = result.entries.size() != m_entries.size()
+        || (m_layout == "tree" && m_treeRoot.value("path").toString() != m_root);
     for (int i = 0; !changed && i < m_entries.size(); ++i) {
         const auto &a = result.entries[i], &b = m_entries[i];
         changed = a.path != b.path || a.mime != b.mime || a.bytes != b.bytes || a.modifiedMs != b.modifiedMs
+            || a.originalPath != b.originalPath || a.deletionDate != b.deletionDate
             || a.parent != b.parent || a.depth != b.depth || a.directory != b.directory || a.symlink != b.symlink;
     }
     if (changed) {
@@ -383,8 +405,9 @@ void FileSystem::applyResult(const ScanResult &result, bool cached, bool watchCh
     if (watchChildren || !m_watcher.directories().contains(m_root)) {
         if (!m_watcher.directories().isEmpty()) m_watcher.removePaths(m_watcher.directories());
         QStringList paths;
-        if (!m_root.isEmpty()) paths << m_root;
-        if (watchChildren) for (const auto &e : m_entries)
+        if (inTrash()) paths = TrashStore::watchPaths();
+        else if (!m_root.isEmpty()) paths << m_root;
+        if (watchChildren && !inTrash()) for (const auto &e : m_entries)
             if (e.directory && !e.symlink && paths.size() < 256) paths << e.path;
         if (!paths.isEmpty()) m_watcher.addPaths(paths);
     }
@@ -395,7 +418,7 @@ QVariantList FileSystem::tabs() const
 {
     QVariantList result;
     for (const auto &tab : m_tabs) result.append(QVariantMap{{"path", tab.root},
-        {"title", tab.root.isEmpty() ? tr("New Tab") : tab.root == "/" ? QString("/") : QFileInfo(tab.root).fileName()}});
+        {"title", tab.root.isEmpty() ? tr("New Tab") : tab.root == "trash:/" ? tr("Trash") : tab.root == "/" ? QString("/") : QFileInfo(tab.root).fileName()}});
     return result;
 }
 QVariantMap FileSystem::viewState() const { return m_tabs[m_currentTab].view; }
@@ -417,8 +440,8 @@ void FileSystem::newTab(const QString &path)
     if (m_tabs.size() >= 32) { emit error("Up to 32 tabs can be open at once."); return; }
     const QString target = path.isEmpty() ? (m_root.isEmpty() ? QDir::homePath() : m_root) : path;
     const QFileInfo info(QUrl(target).isLocalFile() ? QUrl(target).toLocalFile() : target);
-    if (!info.isDir() || !info.isReadable()) { emit error("Cannot read directory: " + target); return; }
-    Tab tab; tab.root = info.absoluteFilePath();
+    if (target != "trash:/" && (!info.isDir() || !info.isReadable())) { emit error("Cannot read directory: " + target); return; }
+    Tab tab; tab.root = target == "trash:/" ? target : info.absoluteFilePath();
     m_tabs.append(tab);
     activateTab(m_tabs.size() - 1);
 }
@@ -451,7 +474,7 @@ void FileSystem::closeTab(int index)
         emit tabsChanged(); emit currentTabChanged();
     }
 }
-void FileSystem::up() { navigate(QFileInfo(m_root).dir().absolutePath()); }
+void FileSystem::up() { navigate(inTrash() ? QDir::homePath() : QFileInfo(m_root).dir().absolutePath()); }
 void FileSystem::setSelected(int index)
 {
     if (index < -1 || index >= m_entries.size() || m_selected == index) return;
@@ -462,7 +485,9 @@ QVariantMap FileSystem::selection() const
 {
     if (m_selected < 0) return {};
     const auto &e = m_entries[m_selected]; const QFileInfo info(e.path);
-    return {{"path", e.path}, {"name", e.name}, {"mime", e.mime}, {"bytes", e.bytes},
+    return {{"trashed", !e.trashDirectory.isEmpty()}, {"originalPath", e.originalPath},
+            {"deleted", e.deletionDate}, {"canRestore", !e.originalPath.isEmpty()},
+            {"path", e.path}, {"name", e.name}, {"mime", e.mime}, {"bytes", e.bytes},
             {"directory", e.directory}, {"symlink", e.symlink}, {"modified", info.lastModified().toString(Qt::ISODate)},
             {"owner", info.owner()}, {"permissions", QString::number(uint(info.permissions()), 16)},
             {"thumbnail", ThumbnailProvider::url(e.path)}, {"center", QVariant::fromValue(e.center)},
@@ -472,12 +497,13 @@ void FileSystem::open(int index)
 {
     if (index < 0 || index >= m_entries.size()) return;
     const auto e = m_entries[index];
+    if (inTrash()) { setSelected(index); restore(); return; }
     if (e.directory) navigate(e.path);
     else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(e.path))) emit error("No application could open " + e.name);
 }
 void FileSystem::openWith(const QString &program)
 {
-    if (selectedPath().isEmpty()) return;
+    if (inTrash() || selectedPath().isEmpty()) return;
     if (!QProcess::startDetached(program, {selectedPath()})) emit error("Could not start " + program);
 }
 QString FileSystem::targetDirectory() const
@@ -487,14 +513,14 @@ QString FileSystem::targetDirectory() const
 }
 void FileSystem::clipboard(bool cut)
 {
-    if (selectedPath().isEmpty()) return;
+    if (inTrash() || selectedPath().isEmpty()) return;
     auto *mime = new QMimeData;
     mime->setUrls({QUrl::fromLocalFile(selectedPath())});
     mime->setData("application/x-kde-cutselection", cut ? "1" : "0");
     mime->setData("x-special/gnome-copied-files", (cut ? QByteArray("cut\n") : QByteArray("copy\n")) + QUrl::fromLocalFile(selectedPath()).toEncoded());
     QGuiApplication::clipboard()->setMimeData(mime);
 }
-bool FileSystem::canPaste() const { return QGuiApplication::clipboard()->mimeData()->hasUrls(); }
+bool FileSystem::canPaste() const { return !inTrash() && QGuiApplication::clipboard()->mimeData()->hasUrls(); }
 
 QString FileSystem::copyEntry(const QString &source, const QString &destination)
 {
@@ -527,6 +553,7 @@ void FileSystem::operation(const std::function<QString()> &work)
 }
 void FileSystem::paste()
 {
+    if (inTrash()) return;
     const auto *mime = QGuiApplication::clipboard()->mimeData();
     const auto urls = mime->urls();
     const bool cut = mime->data("application/x-kde-cutselection") == "1" || mime->data("x-special/gnome-copied-files").startsWith("cut\n");
@@ -556,6 +583,7 @@ bool FileSystem::validName(const QString &name)
 }
 void FileSystem::rename(const QString &name)
 {
+    if (inTrash()) return;
     const QString source = selectedPath();
     if (source.isEmpty() || !validName(name)) return;
     const QString destination = QFileInfo(source).dir().filePath(name);
@@ -567,6 +595,7 @@ void FileSystem::rename(const QString &name)
 }
 void FileSystem::newFolder(const QString &name)
 {
+    if (inTrash()) return;
     if (!validName(name)) return;
     const QString directory = targetDirectory();
     operation([directory, name] { return QDir(directory).mkdir(name) ? QString() : "Cannot create folder: " + name; });
@@ -574,6 +603,10 @@ void FileSystem::newFolder(const QString &name)
 void FileSystem::remove(bool permanently)
 {
     const QString path = selectedPath(); if (path.isEmpty()) return;
+    if (inTrash()) {
+        if (permanently) { const auto entry = m_entries[m_selected]; operation([entry] { return TrashStore::erase(entry); }); }
+        return;
+    }
     operation([path, permanently] {
         const QFileInfo info(path);
         bool ok;
@@ -583,8 +616,20 @@ void FileSystem::remove(bool permanently)
         return ok ? QString() : "Cannot remove: " + path;
     });
 }
+void FileSystem::restore()
+{
+    if (!inTrash() || m_selected < 0) return;
+    const auto entry = m_entries[m_selected];
+    operation([entry] { return TrashStore::restore(entry); });
+}
+void FileSystem::emptyTrash()
+{
+    if (!inTrash()) return;
+    operation([] { return TrashStore::empty(TrashStore::locations()); });
+}
 void FileSystem::copyLocation() { if (!selectedPath().isEmpty()) QGuiApplication::clipboard()->setText(selectedPath()); }
 void FileSystem::terminal()
 {
+    if (inTrash()) return;
     if (!QProcess::startDetached("konsole", {"--workdir", targetDirectory()})) emit error("Could not start Konsole.");
 }

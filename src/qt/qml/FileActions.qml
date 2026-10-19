@@ -6,9 +6,12 @@ import QtQuick.Layouts
 Item {
     id: actions
     property string editAction: ""
-    function confirmRemoval() { confirmDelete.open() }
+    property string removalPath: ""
+    function confirmRemoval() { removalPath = files.selection.path || ""; confirmDelete.open() }
+    function confirmEmptyTrash() { if (files.inTrash) emptyTrashDialog.open() }
     function show(x, y) { menu.x = x; menu.y = y; menu.open() }
     function edit(action) {
+        if (files.inTrash) return
         editAction = action
         field.text = action === "rename" ? files.selection.name : ""
         editDialog.open()
@@ -17,23 +20,25 @@ Item {
     }
     Menu { palette: Theme.controlPalette(Theme.paletteRevision);
         id: menu
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Restore"; visible: files.inTrash; enabled: files.selected >= 0 && files.selection.canRestore && !files.busy; onTriggered: files.restore() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onTriggered: actions.confirmEmptyTrash() }
         objectName: "contextMenu"
         popupType: Popup.Item
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open"; enabled: files.selected >= 0; onTriggered: files.open(files.selected) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open in New Tab"; enabled: files.selected >= 0 && files.selection.directory; onTriggered: files.newTab(files.selection.path) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open With…"; enabled: files.selected >= 0 && !files.selection.directory; onTriggered: actions.edit("openWith") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.open(files.selected) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open in New Tab"; visible: !files.inTrash; enabled: files.selected >= 0 && files.selection.directory; onTriggered: files.newTab(files.selection.path) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open With…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.selection.directory; onTriggered: actions.edit("openWith") }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Cut"; enabled: files.selected >= 0; onTriggered: files.clipboard(true) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy"; enabled: files.selected >= 0; onTriggered: files.clipboard(false) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Paste"; enabled: files.canPaste(); onTriggered: files.paste() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Cut"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.clipboard(true) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.clipboard(false) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Paste"; visible: !files.inTrash; enabled: files.canPaste(); onTriggered: files.paste() }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy Location"; enabled: files.selected >= 0; onTriggered: files.copyLocation() }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Rename…"; enabled: files.selected >= 0; onTriggered: actions.edit("rename") }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Move to Trash"; enabled: files.selected >= 0; onTriggered: files.remove(false) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Delete Permanently…"; enabled: files.selected >= 0; onTriggered: confirmDelete.open() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Rename…"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: actions.edit("rename") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Move to Trash"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.remove(false) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Delete Permanently…"; enabled: files.selected >= 0; onTriggered: actions.confirmRemoval() }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Create Folder…"; onTriggered: actions.edit("mkdir") }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open Terminal Here"; onTriggered: files.terminal() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Create Folder…"; visible: !files.inTrash; onTriggered: actions.edit("mkdir") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open Terminal Here"; visible: !files.inTrash; onTriggered: files.terminal() }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Properties"; enabled: files.selected >= 0; onTriggered: properties.open() }
     }
     Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
@@ -57,6 +62,7 @@ Item {
     }
     Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
         id: confirmDelete
+        objectName: "confirmDeleteDialog"
         popupType: Popup.Item
         anchors.centerIn: parent
         width: Math.min(420, parent.width - 30)
@@ -64,7 +70,19 @@ Item {
         title: "Delete permanently?"
         standardButtons: Dialog.Yes | Dialog.No
         Label { palette: Theme.controlPalette(Theme.paletteRevision); width: parent.width; text: "Delete “" + (files.selection.name || "") + "” and its contents? This cannot be undone."; wrapMode: Text.WordWrap }
-        onAccepted: files.remove(true)
+        onAccepted: { if (files.selection.path === actions.removalPath) files.remove(true) }
+    }
+    Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
+        id: emptyTrashDialog
+        objectName: "emptyTrashDialog"
+        popupType: Popup.Item
+        anchors.centerIn: parent
+        width: Math.min(420, parent.width - 30)
+        modal: true
+        title: "Empty Trash?"
+        standardButtons: Dialog.Yes | Dialog.No
+        Label { palette: Theme.controlPalette(Theme.paletteRevision); width: parent.width; text: "Permanently delete all items in Trash on all currently available volumes? This cannot be undone."; wrapMode: Text.WordWrap }
+        onAccepted: { if (files.inTrash) files.emptyTrash() }
     }
     Popup { palette: Theme.controlPalette(Theme.paletteRevision);
         id: properties
