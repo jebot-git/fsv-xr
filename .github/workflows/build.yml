@@ -1,0 +1,18 @@
+name: Build and test
+on: [push, pull_request]
+jobs:
+  qt6:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: dnf install -y gcc-c++ cmake ninja-build meson pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DFSV_XR=ON -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build -j2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Meson build
+        run: meson setup meson-build -Dxr=enabled && meson compile -C meson-build

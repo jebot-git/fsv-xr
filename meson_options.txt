@@ -1,0 +1,1 @@
+option('xr', type: 'feature', value: 'auto', description: 'Standalone OpenXR via Qt Quick 3D XR (DomeD mode works without it)')

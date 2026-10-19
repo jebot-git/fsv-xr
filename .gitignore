@@ -36,3 +36,9 @@ src/fsv
 
 # meson
 builddir
+
+# fsv-xr builds and rendered test artifacts
+/build*/
+/meson-build*/
+/fsv-xr-desktop.png
+/fsv-xr-map-preview.png

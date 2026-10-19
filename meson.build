@@ -1,46 +1,13 @@
 # SPDX-License-Identifier: MIT
-
-project('fsv', 'c', version: '3.1alpha')
-gtkdep = [dependency('gtk+-3.0'),
-          dependency('gdk-pixbuf-2.0'), dependency('epoxy')]
-cglm_dep = dependency('cglm', fallback : ['cglm', 'cglm_dep'])
-compiler = meson.get_compiler('c')
-conf = configuration_data()
-conf.set_quoted('PACKAGE', meson.project_name())
-conf.set_quoted('VERSION', meson.project_version())
-conf.set_quoted('LOCALEDIR', get_option('datadir') + '/locale')
-conf.set_quoted('DOCDIR', get_option('datadir') + '/doc/fsv')
-
-has_gettext = compiler.has_function('gettext')
-if has_gettext
-  conf.set('ENABLE_NLS', 1)
+project('fsv-xr', 'cpp', version: '0.1.0', default_options: ['cpp_std=c++17', 'warning_level=2'])
+qt = import('qt6')
+deps = dependency('qt6', version: '>=6.8', modules: ['Core', 'Gui', 'Widgets', 'Qml', 'Quick', 'QuickWidgets', 'QuickControls2', 'Quick3D', 'Concurrent'])
+xr = dependency('qt6', version: '>=6.10', modules: ['Quick3DXr'], required: get_option('xr'))
+resources = qt.preprocess(qresources: 'src/qt/resources.qrc')
+moc = qt.preprocess(moc_headers: ['src/qt/filesystem.h', 'src/qt/gestures.h', 'src/qt/domed.h', 'src/qt/appearance.h'])
+executable('fsv-xr', ['src/qt/main.cpp', 'src/qt/domed.cpp', 'src/qt/appearance.cpp', 'src/qt/filesystem.cpp', 'src/qt/filesystemindex.cpp', 'src/qt/thumbnail.cpp', 'src/qt/gestures.cpp', resources, moc],
+  dependencies: [deps, xr], cpp_args: ['-DFSV_HAS_XR=' + (xr.found() ? '1' : '0')], install: true)
+install_data('data/org.fsvxr.fsv-xr.desktop', install_dir: get_option('datadir') / 'applications')
+if xr.found()
+  install_data('data/org.fsvxr.fsv-xr-openxr.desktop', install_dir: get_option('datadir') / 'applications')
 endif
-
-has_scandir = compiler.has_function('scandir')
-if has_scandir
-  conf.set('HAVE_SCANDIR', 1)
-endif
-
-has_file = find_program('file')
-if has_file.found()
-  conf.set('HAVE_FILE_COMMAND', 1)
-  conf.set_quoted('FILE_COMMAND', has_file.path() + ' %s')
-endif
-
-if get_option('buildtype') == 'debug' or get_option('buildtype') == 'debugoptimized'
-    add_project_arguments('-DDEBUG', language: 'c')
-endif
-
-configure_file(output : 'config.h',
-               configuration : conf)
-
-libm = compiler.find_library('m')
-
-subdir('po')
-subdir('debug')
-subdir('lib')
-subdir('src')
-
-# This doesn't work with meson 0.61 and python 3.10
-#rpm = import('rpm')
-#rpm.generate_spec_template()

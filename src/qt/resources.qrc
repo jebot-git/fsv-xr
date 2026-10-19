@@ -1,0 +1,15 @@
+<RCC><qresource prefix="/qml">
+<file alias="ThemedPanel.qml">qml/ThemedPanel.qml</file>
+<file alias="Theme.qml">qml/Theme.qml</file>
+<file alias="qmldir">qml/qmldir</file>
+<file alias="Browser.qml">qml/Browser.qml</file>
+<file alias="Places.qml">qml/Places.qml</file>
+<file alias="Tabs.qml">qml/Tabs.qml</file>
+<file alias="Main.qml">qml/Main.qml</file>
+<file alias="World.qml">qml/World.qml</file>
+<file alias="Inspector.qml">qml/Inspector.qml</file>
+<file alias="FileActions.qml">qml/FileActions.qml</file>
+<file alias="Xr.qml">qml/Xr.qml</file>
+<file alias="SpatialPreview.qml">qml/SpatialPreview.qml</file>
+<file alias="XrHand.qml">qml/XrHand.qml</file>
+</qresource></RCC>

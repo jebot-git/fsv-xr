@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=fsv-xr (OpenXR)
+Comment=Explore the filesystem in a standalone VR headset session using the active OpenXR runtime
+Exec=fsv-xr --xr %f
+TryExec=fsv-xr
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;
+Keywords=filesystem;files;3D;Vulkan;VR;XR;OpenXR;headset;
+StartupWMClass=org.fsvxr.fsv-xr
