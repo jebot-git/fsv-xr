@@ -86,6 +86,8 @@ public:
     Q_INVOKABLE void clipboard(bool cut);
     Q_INVOKABLE bool canPaste() const;
     Q_INVOKABLE void paste();
+    Q_INVOKABLE void extractArchive();
+    Q_INVOKABLE void compress(const QString &name);
     Q_INVOKABLE void startDrag();
     Q_INVOKABLE QString dropDirectory(int index) const;
     Q_INVOKABLE bool canDrop(const QList<QUrl> &urls, const QString &directory) const;

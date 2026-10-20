@@ -197,6 +197,9 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     } else {
     item("Open", selected, [this] { m_files->open(m_files->selected()); });
     item("Open in New Tab", selected && m_files->selection().value("directory").toBool(), [this] { m_files->newTab(m_files->selection().value("path").toString()); });
+    if (m_files->selection().value("archive").toBool())
+        item("Extract Archive", !m_files->busy(), [this] { m_files->extractArchive(); });
+    item("Compress…", selected && !m_files->busy(), [edit] { edit("compress"); });
     item("Open With…", selected && !m_files->selection().value("directory").toBool(), [edit] { edit("openWith"); });
     menu->addSeparator();
     item("Cut", selected, [this] { m_files->clipboard(true); });

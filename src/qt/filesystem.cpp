@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
+#include "archives.h"
 #include "thumbnail.h"
 #include "trash.h"
 #include <QtConcurrent/QtConcurrentRun>
@@ -522,7 +523,7 @@ QVariantMap FileSystem::selection() const
     return {{"trashed", !e.trashDirectory.isEmpty()}, {"originalPath", e.originalPath},
             {"deleted", e.deletionDate}, {"canRestore", !e.originalPath.isEmpty()},
             {"path", e.path}, {"name", e.name}, {"mime", e.mime}, {"bytes", e.bytes},
-            {"directory", e.directory}, {"symlink", e.symlink}, {"modified", info.lastModified().toString(Qt::ISODate)},
+            {"archive", !e.directory && Archives::supported(e.path)}, {"directory", e.directory}, {"symlink", e.symlink}, {"modified", info.lastModified().toString(Qt::ISODate)},
             {"owner", info.owner()}, {"permissions", QString::number(uint(info.permissions()), 16)},
             {"thumbnail", ThumbnailProvider::url(e.path)}, {"center", QVariant::fromValue(e.center)},
             {"extent", QVariant::fromValue(e.extent)}};
@@ -584,6 +585,19 @@ void FileSystem::operation(const std::function<QString()> &work)
     if (busy()) { emit error(m_operating ? "Wait for the current operation to finish." : "Wait for the directory refresh to finish."); return; }
     m_operating = true;
     m_operation.setFuture(QtConcurrent::run(work)); emit busyChanged();
+}
+void FileSystem::extractArchive()
+{
+    if (inTrash() || selectedPath().isEmpty()) return;
+    const QString path = selectedPath();
+    operation([path] { return Archives::extract(path); });
+}
+void FileSystem::compress(const QString &name)
+{
+    if (inTrash() || selectedPath().isEmpty() || !validName(name)) return;
+    const QString source = selectedPath();
+    const QString destination = QFileInfo(source).dir().filePath(name);
+    operation([source, destination] { return Archives::create(source, destination); });
 }
 void FileSystem::paste()
 {

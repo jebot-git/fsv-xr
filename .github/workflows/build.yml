@@ -7,7 +7,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: dnf install -y gcc-c++ cmake ninja-build meson pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel
+        run: dnf install -y gcc-c++ cmake ninja-build meson pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel libarchive-devel
       - name: Configure
         run: cmake -S . -B build -G Ninja -DFSV_XR=ON -DBUILD_TESTING=ON
       - name: Build

@@ -25,6 +25,46 @@ class UiTest : public QObject {
         return nullptr;
     }
 private slots:
+    void archiveActions() {
+        QTemporaryDir temp;
+        QFile file(temp.filePath("sample.txt")); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("archive UI fixture"); file.close();
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy()); files.setSelected(0);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *actions = window->findChild<QObject *>("fileActions"); QVERIFY(actions);
+        QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
+        auto *menu = window->findChild<QObject *>("contextMenu"); QVERIFY(menu);
+        QTRY_VERIFY(menu->property("visible").toBool());
+        QObject *compress = nullptr, *extract = nullptr;
+        for (auto *item : menu->findChildren<QQuickItem *>()) {
+            if (item->metaObject()->indexOfSignal("triggered()") < 0) continue;
+            if (item->property("text").toString() == "Compress…") compress = item;
+            if (item->property("text").toString() == "Extract Archive") extract = item;
+        }
+        QVERIFY(compress); QVERIFY(extract);
+        QVERIFY(compress->property("enabled").toBool()); QVERIFY(!extract->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+        QVERIFY(QMetaObject::invokeMethod(compress, "triggered"));
+        auto *field = window->findChild<QQuickItem *>("nameField"); QVERIFY(field);
+        QTRY_VERIFY(field->isVisible()); QCOMPARE(field->property("text").toString(), QString("sample.txt.zip"));
+        field->setProperty("text", "packed.zip");
+        QVERIFY(QMetaObject::invokeMethod(field, "accepted"));
+        QTRY_VERIFY(!files.busy()); QVERIFY(QFileInfo::exists(temp.filePath("packed.zip")));
+        for (int i = 0; i < files.rowCount(); ++i)
+            if (files.data(files.index(i), FileSystem::Name).toString() == "packed.zip") files.setSelected(i);
+        QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
+        QTRY_VERIFY(extract->property("visible").toBool()); QVERIFY(extract->property("enabled").toBool());
+        QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+        QVERIFY(QMetaObject::invokeMethod(extract, "triggered"));
+        QTRY_VERIFY(!files.busy()); QVERIFY(QFileInfo::exists(temp.filePath("packed/sample.txt")));
+    }
     void nativeFileDrop() {
         QTemporaryDir source, destination;
         const QString filename = "drop # 漢字.txt";

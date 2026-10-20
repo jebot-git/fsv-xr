@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
+#include "archives.h"
+#include <archive.h>
+#include <archive_entry.h>
 #include "trash.h"
 #include "launchcontext.h"
 #include "gestures.h"
@@ -29,6 +32,82 @@ class CoreTest : public QObject {
         return joints;
     }
 private slots:
+    void archiveRoundTrips_data() {
+        QTest::addColumn<QString>("suffix");
+        QTest::newRow("zip") << QString(".zip");
+        QTest::newRow("tar-gzip") << QString(".tar.gz");
+    }
+    void archiveRoundTrips() {
+        QFETCH(QString, suffix);
+        QTemporaryDir temp;
+        const QString source = temp.filePath("source # 漢字");
+        QVERIFY(QDir().mkpath(source + "/empty"));
+        put(source + "/.hidden", "hidden");
+        put(source + "/hello 漢字.txt", QByteArray(150000, 'x'));
+        const QString path = temp.filePath("packed" + suffix);
+        QVERIFY2(Archives::create(source, path).isEmpty(), qPrintable(path));
+        QVERIFY(!Archives::create(source, path).isEmpty());
+        QVERIFY(Archives::supported(path.toUpper()));
+        QVERIFY(Archives::extract(path).isEmpty());
+        const QString extracted = temp.filePath("packed/source # 漢字");
+        QFile content(extracted + "/hello 漢字.txt"); QVERIFY(content.open(QIODevice::ReadOnly));
+        QCOMPARE(content.readAll(), QByteArray(150000, 'x'));
+        QVERIFY(QFileInfo(extracted + "/empty").isDir());
+        QVERIFY(QFileInfo::exists(extracted + "/.hidden"));
+        QVERIFY(!Archives::extract(path).isEmpty());
+        QVERIFY(!Archives::create(source, source + "/inside.zip").isEmpty());
+        QVERIFY(QFile::link(source + "/.hidden", source + "/link"));
+        QVERIFY(!Archives::create(source, temp.filePath("links" + suffix)).isEmpty());
+        QVERIFY(!QFileInfo::exists(temp.filePath("links" + suffix)));
+        QCOMPARE(QDir(temp.path()).entryList({".fsvr-*"}, QDir::AllEntries | QDir::Hidden).size(), 0);
+    }
+    void unsafeArchives_data() {
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<int>("type");
+        QTest::newRow("parent") << QString("../escape") << int(AE_IFREG);
+        QTest::newRow("nested-parent") << QString("child/../../escape") << int(AE_IFREG);
+        QTest::newRow("absolute") << QString("/tmp/fsvr-escape") << int(AE_IFREG);
+        QTest::newRow("backslash") << QString("child\\escape") << int(AE_IFREG);
+        QTest::newRow("symlink") << QString("link") << int(AE_IFLNK);
+        QTest::newRow("fifo") << QString("fifo") << int(AE_IFIFO);
+    }
+    void unsafeArchives() {
+        QFETCH(QString, name); QFETCH(int, type);
+        QTemporaryDir temp;
+        const QString path = temp.filePath("unsafe.tar");
+        auto *writer = archive_write_new();
+        QCOMPARE(archive_write_set_format_pax_restricted(writer), ARCHIVE_OK);
+        QCOMPARE(archive_write_open_filename(writer, QFile::encodeName(path).constData()), ARCHIVE_OK);
+        auto *entry = archive_entry_new();
+        archive_entry_set_pathname(entry, name.toUtf8().constData());
+        archive_entry_set_filetype(entry, type);
+        archive_entry_set_perm(entry, 0644);
+        archive_entry_set_size(entry, 0);
+        if (type == AE_IFLNK) archive_entry_set_symlink(entry, "../escape");
+        QCOMPARE(archive_write_header(writer, entry), ARCHIVE_OK);
+        archive_entry_free(entry);
+        QCOMPARE(archive_write_close(writer), ARCHIVE_OK); archive_write_free(writer);
+        QVERIFY(!Archives::extract(path).isEmpty());
+        QVERIFY(!QFileInfo::exists(temp.filePath("unsafe")));
+        QCOMPARE(QDir(temp.path()).entryList({".fsvr-*"}, QDir::AllEntries | QDir::Hidden).size(), 0);
+    }
+    void archiveModelOperations() {
+        QTemporaryDir temp;
+        put(temp.filePath("sample.txt"), "payload");
+        FileSystem files; QSignalSpy errors(&files, &FileSystem::error);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
+        files.setSelected(0); files.compress("sample.zip"); QTRY_VERIFY(!files.busy());
+        QVERIFY(QFileInfo::exists(temp.filePath("sample.zip")));
+        for (int i = 0; i < files.rowCount(); ++i)
+            if (files.data(files.index(i), FileSystem::Name).toString() == "sample.zip") files.setSelected(i);
+        QVERIFY(files.selection().value("archive").toBool());
+        files.extractArchive(); QTRY_VERIFY(!files.busy());
+        QVERIFY(QFileInfo::exists(temp.filePath("sample/sample.txt")));
+        QCOMPARE(errors.size(), 0);
+        put(temp.filePath("broken.zip"), "invalid archive");
+        QVERIFY(!Archives::extract(temp.filePath("broken.zip")).isEmpty());
+        QVERIFY(!QFileInfo::exists(temp.filePath("broken")));
+    }
     void fileDrops() {
         QTemporaryDir source, destination;
         const QString name = "space # % 漢字.txt";

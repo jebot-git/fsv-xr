@@ -14,7 +14,7 @@ Item {
     function edit(action) {
         if (files.inTrash) return
         editAction = action
-        field.text = action === "rename" ? files.selection.name : ""
+        field.text = action === "rename" ? files.selection.name : action === "compress" ? files.selection.name + ".zip" : ""
         editDialog.open()
         field.forceActiveFocus()
         field.selectAll()
@@ -27,6 +27,8 @@ Item {
         popupType: Popup.Item
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.open(files.selected) }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open in New Tab"; visible: !files.inTrash; enabled: files.selected >= 0 && files.selection.directory; onTriggered: files.newTab(files.selection.path) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Extract Archive"; visible: !files.inTrash && !!files.selection.archive; enabled: !files.busy; onTriggered: files.extractArchive() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Compress…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.busy; onTriggered: actions.edit("compress") }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open With…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.selection.directory; onTriggered: actions.edit("openWith") }
         MenuSeparator {}
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Cut"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.clipboard(true) }
@@ -48,16 +50,17 @@ Item {
         anchors.centerIn: parent
         width: Math.min(420, parent.width - 30)
         modal: true
-        title: actions.editAction === "rename" ? "Rename" : actions.editAction === "mkdir" ? "Create Folder" : "Open With"
+        title: actions.editAction === "rename" ? "Rename" : actions.editAction === "mkdir" ? "Create Folder" : actions.editAction === "compress" ? "Compress" : "Open With"
         standardButtons: Dialog.Ok | Dialog.Cancel
         ColumnLayout {
             width: parent.width
-            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: actions.editAction === "openWith" ? "Executable name or path (one file argument is appended):" : "Name:"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: actions.editAction === "openWith" ? "Executable name or path (one file argument is appended):" : actions.editAction === "compress" ? "Archive name (.zip or .tar.gz):" : "Name:"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             TextField { palette: Theme.controlPalette(Theme.paletteRevision); id: field; objectName: "nameField"; Layout.fillWidth: true; onAccepted: editDialog.accept() }
         }
         onAccepted: {
             if (actions.editAction === "rename") files.rename(field.text)
             else if (actions.editAction === "mkdir") files.newFolder(field.text)
+            else if (actions.editAction === "compress") files.compress(field.text)
             else files.openWith(field.text)
         }
     }

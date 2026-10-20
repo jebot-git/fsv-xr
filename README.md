@@ -10,7 +10,7 @@ preserved under `legacy/` and is excluded from both build systems.
 ## Build
 
 Requires C++17, CMake 3.21+ (or Meson), Qt 6.8+ Core, GUI, Widgets, QML, Quick,
-Quick Widgets, Quick Controls 2, Quick 3D, Concurrent, and a Vulkan driver.
+Quick Widgets, Quick Controls 2, Quick 3D, Concurrent, libarchive, and a Vulkan driver.
 Standalone XR additionally requires Qt 6.10+ Quick 3D XR built with OpenXR/Vulkan,
 an OpenXR loader, and a functioning runtime such as Monado or WiVRn. Qt Test is
 needed when `BUILD_TESTING` is enabled (the CMake default).
@@ -19,7 +19,7 @@ On Fedora 44:
 
 ```sh
 sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel \
-  qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel
+  qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel libarchive-devel
 cmake -S . -B build -G Ninja -DFSV_XR=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -142,6 +142,17 @@ directory into itself, and preserves sources on failure. Cut uses rename; moves
 across filesystems report an error. Open With accepts an executable name/path,
 not a shell command. Clipboard URLs and KDE cut metadata interoperate with Dolphin.
 This is a focused file-operation subset, not full Dolphin feature parity.
+
+The desktop and XR context menus offer **Compress…** for a selected file or folder
+(choose a `.zip` or `.tar.gz` name), and **Extract Archive** for `.zip`, `.tar`,
+`.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `.tar.xz`, `.txz`, and `.tar.zst` files.
+Archives are created beside the source; extraction creates a sibling folder named
+after the archive without its extension. Existing destinations are refused.
+Both operations run in a worker and refresh the view when finished. Failed
+operations remove temporary output. Hidden files and empty folders are included;
+links and special files are rejected. Extraction rejects absolute paths and parent
+traversal, and is limited to 100,000 entries and 10 GiB of uncompressed data.
+Encrypted archives and editing or browsing archive contents are not supported.
 
 Image formats supported by Qt, text, JSON, XML, valid freedesktop thumbnail caches,
 and installed MIME-matching `.thumbnailer` programs supply previews. Install image
