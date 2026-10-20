@@ -28,10 +28,10 @@ int main(int argc, char **argv)
     qputenv("QSG_RHI_BACKEND", "vulkan");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
     QApplication app(argc, argv);
-    app.setApplicationName("fsv-xr");
+    app.setApplicationName("fsvr");
     app.setApplicationVersion("0.1.0");
-    app.setOrganizationName("fsv-xr");
-    app.setDesktopFileName("org.fsvxr.fsv-xr");
+    app.setOrganizationName("fsvr");
+    app.setDesktopFileName("org.fsvxr.fsvr");
     QImageReader::setAllocationLimit(64);
     QCommandLineParser parser;
     parser.setApplicationDescription("Vulkan filesystem explorer. Uses DomeD's desktop or XR launch realm; desktop presentation elsewhere.");

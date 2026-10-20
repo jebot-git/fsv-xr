@@ -108,7 +108,7 @@ XrView {
             Keys.onDownPressed: view.pitch = Math.min(45, view.pitch + 5)
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "fsv-xr · OpenXR / Vulkan"; color: Theme.text; font.pixelSize: 18 }
+                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr · OpenXR / Vulkan"; color: Theme.text; font.pixelSize: 18 }
                 Tabs { Layout.fillWidth: true; Layout.preferredHeight: 40 }
                 Label { palette: Theme.controlPalette(Theme.paletteRevision); text: files.root; color: Theme.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
                 RowLayout {

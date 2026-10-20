@@ -38,8 +38,9 @@ protected:
 
 DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) : m_files(files), m_appearance(appearance)
 {
-    setWindowTitle("fsv-xr — DomeD");
-    connect(files, &FileSystem::rootChanged, this, [this, files] { setWindowTitle("fsv-xr — " + files->root()); });
+    setWindowTitle("fsvr — DomeD");
+    connect(files, &FileSystem::rootChanged, this, [this, files] { setWindowTitle("fsvr — " + files->root()); });
+    setAcceptDrops(true);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_TranslucentBackground);
@@ -107,7 +108,7 @@ void DomeWindow::showPreview(const QPointF &anchor)
     };
     connect(m_appearance, &Appearance::changed, panel, updatePalette);
     updatePalette();
-    panel->setWindowTitle("fsv-xr — " + selection.value("name").toString());
+    panel->setWindowTitle("fsvr — " + selection.value("name").toString());
     panel->setFixedWidth(340);
     auto *layout = new QVBoxLayout(panel);
     auto label = [layout](const QString &text) {
@@ -244,6 +245,7 @@ bool DomeWindow::event(QEvent *event)
         m_preview->close(); event->accept(); return true;
     }
     switch (event->type()) {
+    case QEvent::DragEnter: case QEvent::DragMove: case QEvent::DragLeave: case QEvent::Drop:
     case QEvent::MouseButtonPress: case QEvent::MouseButtonRelease: case QEvent::MouseButtonDblClick:
     case QEvent::MouseMove: case QEvent::Wheel: case QEvent::KeyPress: case QEvent::KeyRelease:
     case QEvent::FocusIn: case QEvent::FocusOut: case QEvent::Enter: case QEvent::Leave:

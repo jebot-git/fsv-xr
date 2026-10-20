@@ -99,7 +99,7 @@ Item {
         property string message: ""
         anchors.centerIn: parent
         width: Math.min(460, parent.width - 30)
-        title: "fsv-xr"
+        title: "fsvr"
         modal: true
         standardButtons: Dialog.Ok
         Label { palette: Theme.controlPalette(Theme.paletteRevision); width: parent.width; text: errorDialog.message; wrapMode: Text.WrapAnywhere }

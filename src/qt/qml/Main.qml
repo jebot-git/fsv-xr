@@ -4,7 +4,7 @@ import QtQuick.Controls
 ApplicationWindow { palette: Theme.controlPalette(Theme.paletteRevision);
     width: 1280; height: 820
     visible: true
-    title: "fsv-xr — " + files.root
+    title: "fsvr — " + files.root
     property alias zoom: browser.zoom
     property alias panX: browser.panX
     property alias panY: browser.panY

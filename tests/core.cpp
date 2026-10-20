@@ -29,6 +29,39 @@ class CoreTest : public QObject {
         return joints;
     }
 private slots:
+    void fileDrops() {
+        QTemporaryDir source, destination;
+        const QString name = "space # % 漢字.txt";
+        const QString path = source.filePath(name);
+        put(path, "drag contents");
+        FileSystem files;
+        files.navigate(destination.path()); QTRY_VERIFY(!files.busy());
+        const QList<QUrl> urls{QUrl::fromLocalFile(path)};
+        QVERIFY(files.canDrop(urls, destination.path()));
+        QVERIFY(!files.canDrop({QUrl("https://example.com/file")}, destination.path()));
+        QVERIFY(!files.canDrop(urls, source.path())); // Same path / collision.
+        QVERIFY(!files.dropFiles(urls, destination.path(), Qt::LinkAction));
+        QVERIFY(files.dropFiles(urls, destination.path(), Qt::CopyAction));
+        QTRY_VERIFY(!files.busy());
+        QVERIFY(QFileInfo::exists(path));
+        QFile copy(destination.filePath(name)); QVERIFY(copy.open(QIODevice::ReadOnly));
+        QCOMPARE(copy.readAll(), QByteArray("drag contents")); copy.close();
+        QVERIFY(!files.canDrop(urls, destination.path()));
+        QVERIFY(!files.dropFiles(urls, destination.path(), Qt::MoveAction));
+        QVERIFY(QFile::remove(destination.filePath(name)));
+        QTRY_VERIFY(!files.busy());
+        QVERIFY(files.dropFiles(urls, destination.path(), Qt::MoveAction));
+        QTRY_VERIFY(!files.busy());
+        QVERIFY(!QFileInfo::exists(path)); QVERIFY(QFileInfo::exists(destination.filePath(name)));
+        QVERIFY(QDir(source.path()).mkpath("folder/child"));
+        const QList<QUrl> folder{QUrl::fromLocalFile(source.filePath("folder"))};
+        QVERIFY(!files.canDrop(folder, source.filePath("folder/child")));
+        QVERIFY(!FileSystem::transferFiles(folder, source.filePath("folder/child"), true).isEmpty());
+        put(source.filePath("keep.txt"));
+        const QList<QUrl> mixed{QUrl::fromLocalFile(source.filePath("keep.txt")), QUrl("https://example.com/file")};
+        QVERIFY(!FileSystem::transferFiles(mixed, destination.path(), false).isEmpty());
+        QVERIFY(!QFileInfo::exists(destination.filePath("keep.txt")));
+    }
     void launchRealmMetadata() {
         QTemporaryDir temp;
         const QString socket = temp.filePath("wayland-test");

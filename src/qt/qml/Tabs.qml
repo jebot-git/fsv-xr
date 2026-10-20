@@ -67,6 +67,7 @@ ThemedPanel {
                             onClicked: files.closeTab(index)
                         }
                     }
+                    FileDrop { anchors.fill: parent; directory: modelData.path }
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.MiddleButton

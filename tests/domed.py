@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in integration test against a built DomeD compositor on private Xvfb.
 
-Usage: python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsv-xr
+Usage: python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsvr
 Starts an isolated compositor/socket, captures its actual client buffer and injects
 XR seat packets. Never modifies DomeD, runtime registrations or session settings.
 """
@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
     set_appearance(True, "#d33a79", [.15, .2, .25])
     fixtures = Path(runtime) / "fixtures"
     fixtures.mkdir()
-    (fixtures / "select-me.txt").write_text("fsv-xr Vulkan thumbnail test\nDomeD Wayland bridge")
+    (fixtures / "select-me.txt").write_text("fsvr Vulkan thumbnail test\nDomeD Wayland bridge")
     env["HOME"] = str(fixtures)
     env["XDG_CACHE_HOME"] = runtime + "/cache"
     env["DOME_FILE_MANAGER"] = executable
@@ -95,8 +95,8 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
             # Match application-menu launch: detect DomeD without --domed.
             client = subprocess.Popen([executable, str(fixtures)], env=client_env, stdout=log, stderr=log)
         def window():
-            assert client.poll() is None, "fsv-xr exited; see client.log"
-            return next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None)
+            assert client.poll() is None, "fsvr exited; see client.log"
+            return next((w for w in state()["windows"] if "fsvr" in w["title"]), None)
         win = wait(window)
         wid = win["id"]
         def frame(surface=None):
@@ -320,22 +320,22 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         wait(lambda: not state()["windows"])
         # Query session-scoped MIME defaults and exercise the real FileManager1 service.
         applications = Path(env["XDG_DATA_HOME"]) / "applications"; applications.mkdir(exist_ok=True)
-        desktop_entry = Path(__file__).resolve().parents[1] / "data/org.fsvxr.fsv-xr.desktop"
-        (applications / desktop_entry.name).write_text(desktop_entry.read_text().replace("Exec=fsv-xr", "Exec=" + executable).replace("TryExec=fsv-xr", "TryExec=" + executable))
+        desktop_entry = Path(__file__).resolve().parents[1] / "data/org.fsvxr.fsvr.desktop"
+        (applications / desktop_entry.name).write_text(desktop_entry.read_text().replace("Exec=fsvr", "Exec=" + executable).replace("TryExec=fsvr", "TryExec=" + executable))
         subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/set-dome-default.py"), "--config-home", env["XDG_CONFIG_HOME"]], check=True, capture_output=True)
         query = subprocess.run(["gio", "mime", "inode/directory"], env={**client_env, "XDG_CURRENT_DESKTOP": "Dome"}, check=True, capture_output=True, text=True)
-        assert "org.fsvxr.fsv-xr.desktop" in query.stdout.splitlines()[0], query.stdout
+        assert "org.fsvxr.fsvr.desktop" in query.stdout.splitlines()[0], query.stdout
         def manager(method, location, realm):
             request_env = {**client_env, "WAYLAND_DISPLAY": desktop_name if realm == "desktop" else name}
             subprocess.run(["gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1." + method, "['" + location + "']", ""], env=request_env, check=True, capture_output=True, timeout=5)
-            return wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None))
+            return wait(lambda: next((w for w in state()["windows"] if "fsvr" in w["title"]), None))
         def close_window():
             post("/api/action", {"op": "close", "id": wid})
             wait(lambda: not state()["windows"] and not state().get("popups", []))
         for realm, realm_socket in [("desktop", desktop_name), ("xr", name)]:
             with (out / ("gio-" + realm + ".log")).open("w") as log:
                 subprocess.run(["gio", "open", fixtures.as_uri()], env={**client_env, "WAYLAND_DISPLAY": realm_socket, "XDG_CURRENT_DESKTOP": "Dome"}, check=True, stdout=log, stderr=log, timeout=5)
-            win = wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None)); wid = win["id"]
+            win = wait(lambda: next((w for w in state()["windows"] if "fsvr" in w["title"]), None)); wid = win["id"]
             assert win["origin"] == realm, "GIO default folder activation lost its launch realm"
             opened = wait(frame); time.sleep(.2); opened = wait(frame)
             assert opened.getpixel(background_pixel)[3] == (255 if realm == "desktop" else 0)
@@ -355,7 +355,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         modifier = xd.keysym_to_keycode(XK.string_to_keysym("Super_L"))
         xtest.fake_input(xd, X.KeyPress, modifier); xd.sync(); key("e")
         xtest.fake_input(xd, X.KeyRelease, modifier); xd.sync()
-        win = wait(lambda: next((w for w in state()["windows"] if "fsv-xr" in w["title"]), None)); wid = win["id"]
+        win = wait(lambda: next((w for w in state()["windows"] if "fsvr" in w["title"]), None)); wid = win["id"]
         assert win["origin"] == "xr" and not win["desktop_visible"], win
         wait(frame); time.sleep(.7)
         image = wait(frame)

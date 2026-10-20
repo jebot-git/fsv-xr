@@ -18,7 +18,7 @@ QString indexPath(const QString &root, const QString &directory)
 }
 QString FileIndex::directory()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/fsv-xr/index-v1";
+    return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/fsvr/index-v1";
 }
 std::optional<ScanResult> FileIndex::load(const QString &root, const QString &directory)
 {

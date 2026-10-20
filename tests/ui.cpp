@@ -13,6 +13,9 @@
 #include <QFile>
 #include <QPainter>
 #include <QStandardPaths>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 
 class UiTest : public QObject {
     Q_OBJECT
@@ -22,6 +25,47 @@ class UiTest : public QObject {
         return nullptr;
     }
 private slots:
+    void nativeFileDrop() {
+        QTemporaryDir source, destination;
+        const QString filename = "drop # 漢字.txt";
+        QFile file(source.filePath(filename)); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("native URI drop"); file.close();
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(destination.path()); QTRY_VERIFY(!files.busy());
+        QVERIFY(QTest::qWaitForWindowExposed(window)); QTest::qWait(250);
+        auto *area = window->findChild<QQuickItem *>("fileDropArea"); QVERIFY(area);
+        const QPoint point = area->mapToScene(QPointF(area->width()/2, area->height()/2)).toPoint();
+        QMimeData mime; mime.setUrls({QUrl::fromLocalFile(source.filePath(filename))});
+        QDragEnterEvent enter(point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::ControlModifier);
+        QCoreApplication::sendEvent(window, &enter); QVERIFY(enter.isAccepted());
+        QDropEvent drop(point, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::ControlModifier);
+        QCoreApplication::sendEvent(window, &drop); QVERIFY(drop.isAccepted());
+        QCOMPARE(drop.dropAction(), Qt::CopyAction);
+        QTRY_VERIFY(!files.busy());
+        QVERIFY(QFileInfo::exists(destination.filePath(filename)));
+        QVERIFY(QFileInfo::exists(source.filePath(filename)));
+        // Move the same URI onto a directory tab, through its real DropArea.
+        QTemporaryDir tabDestination;
+        files.newTab(tabDestination.path()); QTRY_VERIFY(!files.busy());
+        files.activateTab(0); QTRY_VERIFY(!files.busy()); QTest::qWait(100);
+        auto *tab = visualItem(window->contentItem(), "directoryTab1"); QVERIFY(tab);
+        const QPoint tabPoint = tab->mapToScene(QPointF(10, tab->height()/2)).toPoint();
+        QDragEnterEvent tabEnter(tabPoint, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::ShiftModifier);
+        QCoreApplication::sendEvent(window, &tabEnter); QVERIFY(tabEnter.isAccepted());
+        QDropEvent tabDrop(tabPoint, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::ShiftModifier);
+        QCoreApplication::sendEvent(window, &tabDrop); QVERIFY(tabDrop.isAccepted());
+        QCOMPARE(tabDrop.dropAction(), Qt::MoveAction);
+        QTRY_VERIFY(!files.busy());
+        QVERIFY(QFileInfo::exists(tabDestination.filePath(filename)));
+        QVERIFY(!QFileInfo::exists(source.filePath(filename)));
+
+    }
     void internalTrashInteractions() {
         const QString trash = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Trash";
         QVERIFY(QDir().mkpath(trash + "/files")); QVERIFY(QDir().mkpath(trash + "/info"));
@@ -53,7 +97,7 @@ private slots:
         QTRY_COMPARE(restore->property("text").toString(), QString("Restore"));
         QVERIFY(restore->property("enabled").toBool());
         QTest::qWait(150);
-        QVERIFY(window->grabWindow().save("fsv-xr-trash-preview.png"));
+        QVERIFY(window->grabWindow().save("fsvr-trash-preview.png"));
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, restore->mapToScene(QPointF(restore->width()/2, restore->height()/2)).toPoint());
         QTRY_VERIFY(!files.busy()); QTRY_VERIFY(QFileInfo::exists(destination.filePath("restore.txt")));
         QVERIFY(!QFileInfo::exists(trash + "/info/restore.txt.trashinfo"));
@@ -122,7 +166,7 @@ private slots:
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, view->mapToScene(QPointF(point.x(), point.y())).toPoint());
         QTRY_COMPARE(files.selected(), selected);
         const auto frame = window->grabWindow(); QVERIFY(!frame.isNull());
-        QVERIFY(frame.save("fsv-xr-tree-preview.png"));
+        QVERIFY(frame.save("fsvr-tree-preview.png"));
         int branchPixels = 0;
         for (int y = 100; y < frame.height() - 30; ++y) for (int x = 210; x < frame.width() - 320; ++x) {
             const auto color = frame.pixelColor(x, y);
@@ -301,12 +345,11 @@ private slots:
         const QPoint click = view->mapToScene(QPointF(point.x(), point.y())).toPoint();
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, click);
         QTRY_COMPARE(files.selected(), 0);
-        // Dragging an object keeps selection behaviour; only a background
-        // press (or Alt) initiates view rotation.
+        // Sub-threshold object motion remains a click and does not rotate.
         QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, click);
-        QMouseEvent objectDrag(QEvent::MouseMove, click + QPoint(20, 10), window->mapToGlobal(click + QPoint(20, 10)), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent objectDrag(QEvent::MouseMove, click + QPoint(2, 1), window->mapToGlobal(click + QPoint(2, 1)), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
         QCoreApplication::sendEvent(window, &objectDrag);
-        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, click + QPoint(20, 10));
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, click + QPoint(2, 1));
         QCOMPARE(window->property("yaw").toReal(), 0.);
         QCOMPARE(window->property("pitch").toReal(), 0.);
         QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, click);
@@ -349,7 +392,7 @@ private slots:
         QVERIFY(window->property("pitch").toReal() > 0);
         QCOMPARE(files.selected(), -1);
         const auto image = window->grabWindow(); QVERIFY(!image.isNull());
-        QVERIFY(image.save("fsv-xr-desktop.png"));
+        QVERIFY(image.save("fsvr-desktop.png"));
         auto place = visualItem(window->contentItem(), "place0"); QVERIFY(place);
         QVERIFY(place->isVisible());
         const auto placePoint = place->mapToScene(QPointF(place->width() / 2, place->height() / 2)).toPoint();
@@ -362,7 +405,7 @@ private slots:
         window->setProperty("yaw", 0);
         window->setProperty("pitch", 0);
         QTest::qWait(500);
-        QVERIFY(window->grabWindow().save("fsv-xr-map-preview.png"));
+        QVERIFY(window->grabWindow().save("fsvr-map-preview.png"));
     }
 #if FSV_HAS_XR
     void spatialPreviewSelectionLifecycle() {

@@ -87,7 +87,7 @@ ThemedPanel {
         anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
         RowLayout {
             anchors.fill: parent; anchors.margins: 5
-            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: " fsv-xr "; font.bold: true; font.pixelSize: 22 }
+            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: " fsvr "; font.bold: true; font.pixelSize: 22 }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
@@ -139,6 +139,8 @@ ThemedPanel {
                 property bool scrollMode: false
                 property bool scrollWasActive: false
                 property bool rotating: false
+                property bool fileDrag: false
+                property bool dragged: false
                 onPressed: event => {
                     clickPreview.stop()
                     scrollWasActive = scrollMode
@@ -147,6 +149,8 @@ ThemedPanel {
                     start = previous
                     forceActiveFocus()
                     rotating = false
+                    dragged = false
+                    fileDrag = false
                     if (event.button !== Qt.MiddleButton) {
                         const hit = view.pick(event.x, event.y)
                         files.selected = hit.objectHit ? hit.objectHit.entryIndex : -1
@@ -155,12 +159,21 @@ ThemedPanel {
                         rotating = event.button === Qt.LeftButton
                             && (!hit.objectHit || !!(event.modifiers & Qt.AltModifier))
                     }
+                    fileDrag = event.button === Qt.LeftButton && !rotating && files.selected >= 0 && !files.busy && !files.inTrash
                     if (event.button === Qt.RightButton) {
                         const point = mouse.mapToItem(window, event.x, event.y)
                         window.showActionsAt(point.x, point.y)
                     }
                 }
                 onPositionChanged: event => {
+                    if (fileDrag && (pressedButtons & Qt.LeftButton)
+                            && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) >= Qt.styleHints.startDragDistance) {
+                        fileDrag = false
+                        dragged = true
+                        clickPreview.stop()
+                        files.startDrag()
+                        return
+                    }
                     if (pressedButtons & Qt.MiddleButton) {
                         const dx = event.x - previous.x, dy = event.y - previous.y
                         // MMB drag pans. Shift+MMB converts vertical motion into scroll/zoom.
@@ -174,7 +187,7 @@ ThemedPanel {
                 }
                 onReleased: event => {
                     rotating = false
-                    if (event.button === Qt.LeftButton && !(event.modifiers & Qt.AltModifier) && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5 && window.spatialPopups) {
+                    if (!dragged && event.button === Qt.LeftButton && !(event.modifiers & Qt.AltModifier) && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5 && window.spatialPopups) {
                         // Allow a real mouse double-click to open a directory
                         // before a preview popup can take the pointer grab.
                         clickPreview.selectedPath = files.selection.path || ""
@@ -187,7 +200,7 @@ ThemedPanel {
                     }
                 }
                 hoverEnabled: true
-                onCanceled: { clickPreview.stop(); scrollMode = false; rotating = false }
+                onCanceled: { fileDrag = false; clickPreview.stop(); scrollMode = false; rotating = false }
                 onExited: { if (!pressed) scrollMode = false }
                 Connections { target: window; function onActiveChanged() { if (!window.active) { mouse.scrollMode = false } } }
                 onDoubleClicked: event => { clickPreview.stop(); if (event.button === Qt.LeftButton) files.open(files.selected) }
@@ -198,9 +211,41 @@ ThemedPanel {
                 Keys.onUpPressed: { scrollMode = false; window.rotateView(0, -5) }
                 Keys.onDownPressed: { scrollMode = false; window.rotateView(0, 5) }
             }
+            DropArea {
+                id: fileDrop
+                objectName: "fileDropArea"
+                anchors.fill: parent
+                property string directory: ""
+                function updateTarget(drag) {
+                    const hit = view.pick(drag.x, drag.y)
+                    const index = hit.objectHit ? hit.objectHit.entryIndex : -1
+                    directory = files.dropDirectory(index)
+                    drag.accepted = drag.hasUrls && files.canDrop(drag.urls, directory)
+                }
+                onEntered: drag => updateTarget(drag)
+                onPositionChanged: drag => updateTarget(drag)
+                onDropped: drop => {
+                    updateTarget(drop)
+                    if (drop.accepted && files.dropFiles(drop.urls, directory, drop.proposedAction))
+                        drop.acceptProposedAction()
+                    else drop.accepted = false
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    visible: fileDrop.containsDrag
+                    color: "transparent"
+                    border.width: 2; border.color: Theme.colors.highlight
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top; anchors.topMargin: 12
+                        text: "Drop into " + fileDrop.directory
+                        color: Theme.text
+                    }
+                }
+            }
             Label { palette: Theme.controlPalette(Theme.paletteRevision);
                 anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 16
-                text: files.busy ? files.cached ? "Refreshing cached view…" : "Loading…" : mouse.scrollMode ? "Scroll zoom active · move up/down · click or Escape to stop" : "LMB select / drag background or arrow keys to tilt · RMB actions · MMB pan / scroll-zoom"
+                text: files.busy ? files.cached ? "Refreshing cached view…" : "Loading…" : mouse.scrollMode ? "Scroll zoom active · move up/down · click or Escape to stop" : "LMB select / drag files · drag background or arrow keys to tilt · RMB actions · MMB pan / scroll-zoom"
                 color: Theme.muted; font.pixelSize: 11
             }
             BusyIndicator { anchors.centerIn: parent; running: files.busy }

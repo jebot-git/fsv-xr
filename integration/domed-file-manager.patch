@@ -1,4 +1,4 @@
-# DomeD companion integration for fsv-xr
+# DomeD companion integration for fsvr
 # Base: 44f30e5974bd20c97e6f32475e4a932b4cc4a4be
 # Apply with: git -C /path/to/DomeD apply /path/to/fsv/integration/domed-file-manager.patch
 
@@ -222,7 +222,7 @@ index 0000000..8a2dcc8
 +    command
 +}
 +pub fn launch(socket: &str, arguments: &[String]) -> io::Result<()> {
-+    let binary = std::env::var_os("DOME_FILE_MANAGER").unwrap_or_else(|| "fsv-xr".into());
++    let binary = std::env::var_os("DOME_FILE_MANAGER").unwrap_or_else(|| "fsvr".into());
 +    let mut child = command_for(socket, binary, arguments).spawn()?;
 +    std::thread::spawn(move || { let _ = child.wait(); });
 +    Ok(())
@@ -233,7 +233,7 @@ index 0000000..8a2dcc8
 +    fn folder_launch_keeps_selected_realm_and_literal_urls() {
 +        for socket in ["dome-desktop-test", "dome-xr-test"] {
 +            let args = vec!["--select".into(), "--".into(), "file:///tmp/a%20%23%20file".into()];
-+            let command = super::command_for(socket, "fsv-xr".into(), &args);
++            let command = super::command_for(socket, "fsvr".into(), &args);
 +            assert_eq!(command.get_args().collect::<Vec<_>>(), ["--select", "--", "file:///tmp/a%20%23%20file"]);
 +            assert!(command.get_envs().any(|(key, value)| key == "WAYLAND_DISPLAY" && value == Some(socket.as_ref())));
 +            assert!(command.get_envs().any(|(key, value)| key == "WAYLAND_SOCKET" && value.is_none()));
@@ -278,7 +278,7 @@ index 0000000..56912ff
 +        if urls.len() > 32 || urls.iter().map(String::len).sum::<usize>() > 65536 {
 +            return Err(zbus::fdo::Error::LimitsExceeded("At most 32 local locations per request".into()));
 +        }
-+        // fsv-xr owns URL decoding, file validation and error presentation.
++        // fsvr owns URL decoding, file validation and error presentation.
 +        if urls.is_empty() { return Ok(()); }
 +        if urls.iter().any(|url| !(url.starts_with("file://") || url == "trash:/" || url == "trash:///")) {
 +            return Err(zbus::fdo::Error::InvalidArgs("Only local file URLs and trash:/ are supported".into()));
@@ -286,7 +286,7 @@ index 0000000..56912ff
 +        let socket = self.socket(connection, header).await;
 +        let mut arguments: Vec<String> = option.into_iter().map(str::to_owned).collect();
 +        arguments.push("--".into()); arguments.extend(urls);
-+        let binary = std::env::var_os("DOME_FILE_MANAGER").unwrap_or_else(|| "fsv-xr".into());
++        let binary = std::env::var_os("DOME_FILE_MANAGER").unwrap_or_else(|| "fsvr".into());
 +        let mut command = dome::file_manager::command_for(&socket, binary, &arguments);
 +        if !startup.is_empty() { command.env("DESKTOP_STARTUP_ID", startup); }
 +        let mut child = command.spawn().map_err(|e| zbus::fdo::Error::Failed(format!("Cannot launch file manager: {e}")))?;

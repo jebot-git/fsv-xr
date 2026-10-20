@@ -1,4 +1,6 @@
-# fsv-xr
+# fsvr
+
+Previously named fsv-xr.
 
 A Qt6 filesystem visualizer rendered with Vulkan, forked from
 [fsv](http://fsv.sourceforge.net/) by Daniel Richard G. The active implementation
@@ -21,18 +23,18 @@ sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel \
 cmake -S . -B build -G Ninja -DFSV_XR=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/fsv-xr /path/to/directory
+./build/fsvr /path/to/directory
 cmake --install build --prefix "$HOME/.local"
 update-desktop-database "$HOME/.local/share/applications"
 ```
 
-The local install provides **fsv-xr** in the application menu, plus **fsv-xr
+The local install provides **fsvr** in the application menu, plus **fsvr
 (OpenXR)** when standalone XR is built. Keep `~/.local/bin` in the desktop
 session's `PATH`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
 Desktop launches retain desktop presentation; XR launches use transparent scenes
 and spatial popups, including when a headset is already active. Its menu actions can explicitly select desktop or the
 current DomeD session. The OpenXR entry starts its own headset session using the
-active runtime; use the main entry inside DomeD. The install includes Dome-specific MIME defaults; run `fsv-xr-dome-default`
+active runtime; use the main entry inside DomeD. The install includes Dome-specific MIME defaults; run `fsvr-dome-default`
 to enable the user override for DomeD without changing KDE/GNOME defaults.
 The OpenXR runtime is unchanged.
 
@@ -83,7 +85,7 @@ selection, zoom, pan, rotation and tilt; up to 32 tabs can be open. Switching ta
 restores the in-memory scene immediately and refreshes it in the background.
 
 Visited directories have a persistent metadata index under
-`$XDG_CACHE_HOME/fsv-xr/index-v1` (normally `~/.cache/fsv-xr/index-v1`). On a
+`$XDG_CACHE_HOME/fsvr/index-v1` (normally `~/.cache/fsvr/index-v1`). On a
 subsequent visit or application launch, the index supplies the first scene without
 waiting for a full recursive scan. Cold locations publish an initial batch while
 scanning continues. Cache reads, scans and atomic index writes run on a worker;
@@ -158,12 +160,12 @@ space for their names below their children.
 
 Launch against the **socket printed by your DomeD compositor**, using the same
 `XDG_RUNTIME_DIR`. DomeD owns the OpenXR session and hand tracking in this mode;
-fsv-xr consumes its normal Wayland seat input and never opens a second XR
+fsvr consumes its normal Wayland seat input and never opens a second XR
 session. The companion integration and deployment steps are in
 [docs/domed-integration.md](docs/domed-integration.md).
 
 The compositor publishes a versioned `<wayland-socket>.dome-session.json` record
-for each of its two sockets. fsv-xr verifies the socket peer and compositor PID,
+for each of its two sockets. fsvr verifies the socket peer and compositor PID,
 then uses the socket's launch realm, including inherited `WAYLAND_SOCKET` FDs.
 DomeD desktop launches retain an opaque desktop view and inline properties;
 XR launches use spatial presentation. A missing/invalid record falls back to
@@ -175,7 +177,7 @@ Wayland surface preserves alpha; controls and Places retain their themed panels.
 Standalone OpenXR requests passthrough where supported by the active runtime.
 
 ```sh
-QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-N ./build/fsv-xr --domed /path
+QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-N ./build/fsvr --domed /path
 ```
 
 DomeD maps index/thumb to LMB, middle/thumb to MMB, and ring/thumb to RMB. These
@@ -207,7 +209,7 @@ pixels above that point, and applies its direct-view/dome depth, beam, work-area
 clamping and bounded scroll-viewport policies. RMB on the preview opens a child
 menu attached to that preview. Qt handles native menu keyboard navigation and
 Escape; DomeD routes hand input and owns oversized-menu arrow/wheel scrolling.
-fsv-xr exports the full menu buffer to avoid nesting Qt's screen-height scroller
+fsvr exports the full menu buffer to avoid nesting Qt's screen-height scroller
 inside DomeD's viewport. Properties reopens the file preview. File operations and confirmation dialogs use
 the same backend as the desktop UI.
 
@@ -216,14 +218,14 @@ DomeD and standalone XR modes follow `$XDG_CONFIG_HOME/dome/appearance.json`
 shell palette; accent, scene background and panel opacity follow its saved settings.
 Changes apply live to QML controls, the Vulkan view, and open preview panels,
 including when DomeD atomically replaces the settings file. Invalid settings retain
-the last valid theme. Outside these XR modes, fsv-xr uses the host Qt palette.
+the last valid theme. Outside these XR modes, fsvr uses the host Qt palette.
 XR modes use the Fusion Qt Quick Controls style so host-specific styles cannot
-override DomeD's palette. No theme settings are written by fsv-xr.
+override DomeD's palette. No theme settings are written by fsvr.
 
 Optional integration test (Python 3 + Pillow, python-xlib, Xvfb, built DomeD):
 
 ```sh
-python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsv-xr
+python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsvr
 ```
 
 This starts and stops an isolated nested compositor on a private Xvfb display,
@@ -241,7 +243,7 @@ sources, the user's appearance file, or runtime settings.
 ## Standalone OpenXR
 
 ```sh
-XR_RUNTIME_JSON=/path/to/runtime.json ./build/fsv-xr --xr /path
+XR_RUNTIME_JSON=/path/to/runtime.json ./build/fsvr --xr /path
 ```
 
 Qt Quick 3D XR owns session lifecycle, Vulkan graphics binding, stereo views and
@@ -269,3 +271,16 @@ stereo output and physical hand ergonomics
 still require headset testing. The new layouts approximate the original fsv
 presentations; legacy color configuration, translations, and animation behavior
 have not been ported.
+
+### File drag and drop
+
+Drag a file or folder with the left mouse button into another application, onto
+another folder in the 3D view, or onto a place or directory tab. Dropping on the
+view background targets the current directory. Native file URLs preserve spaces,
+Unicode and special characters in filenames. Drags default to copy; use Shift
+for move or Ctrl for copy. Existing destination names and recursive folder drops
+are rejected. Moves within fsvr use rename; moves across filesystems report an
+error and leave the source intact. Trash items must be restored before dragging.
+
+Desktop and DomeD windows use Qt's native drag-and-drop protocol. Cross-application
+drags require drag-and-drop support in the compositor and receiving application.

@@ -37,11 +37,14 @@ src/fsv
 # meson
 builddir
 
-# fsv-xr builds and rendered test artifacts
+# fsvr builds and rendered test artifacts
 /build*/
 /meson-build*/
 /fsv-xr-desktop.png
 /fsv-xr-map-preview.png
 /fsv-xr-tree-preview.png
+/fsvr-desktop.png
+/fsvr-map-preview.png
+/fsvr-tree-preview.png
 
 __pycache__/

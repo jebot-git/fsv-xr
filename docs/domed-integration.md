@@ -1,21 +1,21 @@
 # DomeD default file-manager integration
 
-Use the ordinary **fsv-xr** desktop entry in both DomeD realms. The standalone
+Use the ordinary **fsvr** desktop entry in both DomeD realms. The standalone
 OpenXR entry creates its own XR session and is for use outside DomeD.
 
 ## Install
 
-Build/install fsv-xr, then run:
+Build/install fsvr, then run:
 
 ```sh
 cmake --install build --prefix "$HOME/.local"
 update-desktop-database "$HOME/.local/share/applications"
-"$HOME/.local/bin/fsv-xr-dome-default"
+"$HOME/.local/bin/fsvr-dome-default"
 ```
 
 The helper updates only `$XDG_CONFIG_HOME/dome-mimeapps.list` (default
 `~/.config/dome-mimeapps.list`). It sets `inode/directory` and
-`x-scheme-handler/trash` to `org.fsvxr.fsv-xr.desktop`, preserving other Dome
+`x-scheme-handler/trash` to `org.fsvxr.fsvr.desktop`, preserving other Dome
 preferences. Desktop-specific defaults are selected by `XDG_CURRENT_DESKTOP=Dome`;
 KDE/GNOME and global `mimeapps.list` files are untouched. A distribution-level
 `dome-mimeapps.list` is also installed beside the application entry.
@@ -27,11 +27,11 @@ as [a patch](../integration/domed-file-manager.patch).
 They add **Open Files** / **Super+E**, a session-local FileManager1 service and
 per-socket realm metadata. Apply against the DomeD revision recorded in the patch
 header, then rebuild/install DomeD using its own build and installation scripts.
-Restart DomeD to use the new compositor; updating fsv-xr alone cannot update an
+Restart DomeD to use the new compositor; updating fsvr alone cannot update an
 already running compositor.
 
 `DOME_FILE_MANAGER` can override the file-manager executable (one executable
-path, not a shell command). The default is `fsv-xr`, which must be on DomeD's PATH.
+path, not a shell command). The default is `fsvr`, which must be on DomeD's PATH.
 DomeD launches it on the selected realm's socket and removes an inherited
 `WAYLAND_SOCKET` to avoid reconnecting to the wrong realm.
 
@@ -78,7 +78,7 @@ on a private bus. Set it to `0` to disable the service.
 
 ```sh
 ctest --test-dir build --output-on-failure
-python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsv-xr
+python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsvr
 ```
 
 The compositor test uses private Xvfb/D-Bus sessions and a synthetic XR heartbeat.

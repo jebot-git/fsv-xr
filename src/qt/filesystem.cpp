@@ -4,6 +4,8 @@
 #include "trash.h"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QClipboard>
+#include <QDrag>
+#include <QWindow>
 #include <QColor>
 #include <QDesktopServices>
 #include <QDir>
@@ -143,7 +145,7 @@ QVariantList FileSystem::readPlaces(const QString &bookmarkFile, bool includeDev
                     const auto value = xml.readElementText(); --depth;
                     if (name == "title") title = value;
                     else if (name == "IsHidden") hidden = value.compare("true", Qt::CaseInsensitive) == 0;
-                    else privateEntry = !value.isEmpty() && value != "fsv-xr";
+                    else privateEntry = !value.isEmpty() && value != "fsvr";
                 }
             }
             if (url.scheme() == "trash" && !privateEntry) {
@@ -590,22 +592,83 @@ void FileSystem::paste()
     const auto urls = mime->urls();
     const bool cut = mime->data("application/x-kde-cutselection") == "1" || mime->data("x-special/gnome-copied-files").startsWith("cut\n");
     const QString directory = targetDirectory();
-    operation([urls, cut, directory] {
-        for (const auto &url : urls) {
-            if (!url.isLocalFile()) return QString("Only local file URLs can be pasted.");
-            const QString src = url.toLocalFile();
-            const QString dst = directory + '/' + QFileInfo(src).fileName();
-            // Move via rename only. Cross-device moves fail without risking source loss.
-            if (cut) {
-                if (QFileInfo::exists(dst) || QFileInfo(dst).isSymLink() || !QDir().rename(src, dst))
-                    return QString("Cannot move (destination exists, permissions, or different filesystem): ") + src;
-            } else {
-                const auto error = copyEntry(src, dst); if (!error.isEmpty()) return error;
-            }
-        }
-        return QString();
-    });
+    operation([urls, cut, directory] { return transferFiles(urls, directory, cut); });
 }
+QString FileSystem::dropDirectory(int index) const
+{
+    return index >= 0 && index < m_entries.size() && m_entries[index].directory ? m_entries[index].path : m_root;
+}
+void FileSystem::startDrag()
+{
+    if (busy() || inTrash() || selectedPath().isEmpty()) return;
+    auto *window = QGuiApplication::focusWindow();
+    if (!window) return;
+    auto *drag = new QDrag(window);
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl::fromLocalFile(selectedPath())});
+    drag->setMimeData(mime);
+    // File managers handle filesystem moves at the destination. Never delete
+    // the source in response to the returned action (a target may have moved it).
+    drag->exec(Qt::CopyAction | Qt::MoveAction, Qt::CopyAction);
+    drag->deleteLater();
+    refresh();
+}
+bool FileSystem::canDrop(const QList<QUrl> &urls, const QString &directory) const
+{
+    if (busy() || inTrash() || urls.isEmpty()) return false;
+    const QFileInfo target(directory);
+    const QString parent = target.canonicalFilePath();
+    if (!target.isDir() || !target.isWritable() || parent.isEmpty()) return false;
+    QSet<QString> destinations;
+    for (const auto &url : urls) {
+        if (!url.isLocalFile()) return false;
+        const QFileInfo source(url.toLocalFile());
+        if ((!source.exists() && !source.isSymLink()) || source.fileName().isEmpty()) return false;
+        const QString destination = QDir(directory).filePath(source.fileName());
+        const QFileInfo dst(destination);
+        if (dst.exists() || dst.isSymLink() || destinations.contains(destination)) return false;
+        destinations.insert(destination);
+        const QString canonical = source.canonicalFilePath();
+        if (source.isDir() && !source.isSymLink()
+            && (parent == canonical || parent.startsWith(canonical + '/'))) return false;
+    }
+    return true;
+}
+bool FileSystem::dropFiles(const QList<QUrl> &urls, const QString &directory, int action)
+{
+    if ((action != Qt::CopyAction && action != Qt::MoveAction) || !canDrop(urls, directory)) return false;
+    operation([urls, directory, action] { return transferFiles(urls, directory, action == Qt::MoveAction); });
+    return true;
+}
+QString FileSystem::transferFiles(const QList<QUrl> &urls, const QString &directory, bool move)
+{
+    if (!QFileInfo(directory).isDir()) return "Destination is not a directory: " + directory;
+    // Validate the entire batch before changing any files.
+    QSet<QString> destinations;
+    for (const auto &url : urls) {
+        if (!url.isLocalFile()) return "Only local file URLs can be transferred.";
+        const QFileInfo src(url.toLocalFile());
+        const QString dst = QDir(directory).filePath(src.fileName());
+        if ((!src.exists() && !src.isSymLink()) || src.fileName().isEmpty()) return "Source does not exist: " + src.filePath();
+        if (QFileInfo::exists(dst) || QFileInfo(dst).isSymLink() || destinations.contains(dst)) return "Destination already exists: " + dst;
+        destinations.insert(dst);
+        const QString parent = QFileInfo(directory).canonicalFilePath(), canonical = src.canonicalFilePath();
+        if (src.isDir() && !src.isSymLink() && (parent == canonical || parent.startsWith(canonical + '/')))
+            return "Cannot transfer a directory into itself.";
+    }
+    for (const auto &url : urls) {
+        const QString src = url.toLocalFile(), dst = QDir(directory).filePath(QFileInfo(src).fileName());
+        if (move) {
+            // Cross-device moves fail without risking source loss.
+            if (!QDir().rename(src, dst)) return "Cannot move (permissions or different filesystem): " + src;
+        } else {
+            const auto error = copyEntry(src, dst);
+            if (!error.isEmpty()) return error;
+        }
+    }
+    return {};
+}
+
 bool FileSystem::validName(const QString &name)
 {
     if (name.isEmpty() || name == "." || name == ".." || name.contains('/') || name.contains(QChar(0))) {

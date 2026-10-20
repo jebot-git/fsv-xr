@@ -49,6 +49,7 @@ ThemedPanel {
                 ToolTip.visible: hovered
                 ToolTip.text: modelData.path
                 ToolTip.delay: 700
+                FileDrop { anchors.fill: parent; directory: modelData.path }
                 MouseArea {
                     anchors.fill: parent
                     acceptedButtons: Qt.MiddleButton

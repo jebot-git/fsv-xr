@@ -4,6 +4,7 @@
 #include <QFutureWatcher>
 #include <QFileSystemWatcher>
 #include <QVariantMap>
+#include <QUrl>
 #include <QVector3D>
 #include <atomic>
 #include <memory>
@@ -85,6 +86,11 @@ public:
     Q_INVOKABLE void clipboard(bool cut);
     Q_INVOKABLE bool canPaste() const;
     Q_INVOKABLE void paste();
+    Q_INVOKABLE void startDrag();
+    Q_INVOKABLE QString dropDirectory(int index) const;
+    Q_INVOKABLE bool canDrop(const QList<QUrl> &urls, const QString &directory) const;
+    Q_INVOKABLE bool dropFiles(const QList<QUrl> &urls, const QString &directory, int action);
+    static QString transferFiles(const QList<QUrl> &urls, const QString &directory, bool move);
     Q_INVOKABLE void rename(const QString &name);
     Q_INVOKABLE void newFolder(const QString &name);
     Q_INVOKABLE void remove(bool permanently = false);

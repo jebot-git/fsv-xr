@@ -19,7 +19,7 @@ def configure(directory):
     if not config.has_section("Default Applications"):
         config.add_section("Default Applications")
     for mime in ("inode/directory", "x-scheme-handler/trash"):
-        config.set("Default Applications", mime, "org.fsvxr.fsv-xr.desktop;")
+        config.set("Default Applications", mime, "org.fsvxr.fsvr.desktop;")
     fd, temporary = tempfile.mkstemp(prefix=".dome-mimeapps-", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
