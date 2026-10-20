@@ -329,6 +329,7 @@ Part of the [de-xr desktop](https://github.com/topics/de-xr):
 [DomeD](https://github.com/jebot-git/DomeD) provides the desktop/session,
 [Ghostty XR](https://github.com/jebot-git/ghostty-xr) the terminal,
 [mpvr](https://github.com/jebot-git/mpvr) video playback,
+[cmuxr](https://github.com/jebot-git/cmuxr) music playback and an audio-reactive XR floor,
 [fsvr](https://github.com/jebot-git/fsv-xr) file browsing,
 [qimgvr](https://github.com/jebot-git/qimgvr) image viewing,
 [Arc SBS](https://github.com/jebot-git/arc-sbs) depth conversion, and
