@@ -1,0 +1,40 @@
+.TH FSVR 1 "2026-10-20" "de-xr" "User Commands"
+.SH NAME
+fsvr \- explore files in a Qt6 and Vulkan spatial view
+.SH SYNOPSIS
+.nf
+fsvr [OPTIONS] [LOCATIONS...]
+.fi
+.SH DESCRIPTION
+Explore directories as spatial objects, with tabs, previews, bookmarks, Trash and file operations. Locations may be local paths, file: URLs or trash:/. Additional locations open additional tabs.
+.SH OPTIONS
+.TP
+.B "\-\-desktop"
+Force desktop presentation.
+.TP
+.B "\-\-domed"
+Use the DomeD bridge while preserving the launching desktop or XR realm.
+.TP
+.B "\-\-xr"
+Start a standalone OpenXR session; requires an XR\-enabled build and active runtime.
+.TP
+.B "\-\-select"
+Reveal supplied files in their parent locations.
+.TP
+.B "\-\-properties"
+Reveal supplied files and display their properties.
+.TP
+.B "\-\-smoke\-test"
+Render for approximately three seconds and exit for diagnostics.
+.TP
+.B "\-\-help, \-\-help\-all"
+Show command\-line help.
+.TP
+.B "\-\-version"
+Show version.
+.SH KEYS
+Ctrl+T opens a tab, Ctrl+W closes a tab, Ctrl+Tab and Ctrl+Shift+Tab switch tabs. F5 refreshes the current filesystem snapshot.
+.SH FILES
+$XDG_DATA_HOME/user\-places.xbel supplies local Places bookmarks. $XDG_CACHE_HOME/fsvr/index\-v1 holds a bounded, revalidated preview index.
+.SH SEE ALSO
+dome\-compositor(1), qimgvr(1)

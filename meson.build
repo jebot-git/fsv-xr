@@ -16,3 +16,5 @@ endif
 install_data('data/dome-mimeapps.list', install_dir: get_option('datadir') / 'applications')
 
 install_data('scripts/set-dome-default.py', install_dir: get_option('bindir'), rename: 'fsvr-dome-default', install_mode: 'rwxr-xr-x')
+
+install_man('docs/man/fsvr.1')

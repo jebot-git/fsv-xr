@@ -24,13 +24,13 @@ cmake -S . -B build -G Ninja -DFSV_XR=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/fsvr /path/to/directory
-cmake --install build --prefix "$HOME/.local"
-update-desktop-database "$HOME/.local/share/applications"
+sudo cmake --install build --prefix /usr/local
+sudo update-desktop-database /usr/local/share/applications
 ```
 
-The local install provides **fsvr** in the application menu, plus **fsvr
-(OpenXR)** when standalone XR is built. Keep `~/.local/bin` in the desktop
-session's `PATH`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
+The system install provides **fsvr** in the application menu, plus **fsvr
+(OpenXR)** when standalone XR is built. Keep `/usr/local/bin` in the desktop
+session's `PATH`. A per-user alternative is `cmake --install build --prefix "$HOME/.local"`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
 Desktop launches retain desktop presentation; XR launches use transparent scenes
 and spatial popups, including when a headset is already active. Its menu actions can explicitly select desktop or the
 current DomeD session. The OpenXR entry starts its own headset session using the
@@ -318,3 +318,18 @@ error and leave the source intact. Trash items must be restored before dragging.
 
 Desktop and DomeD windows use Qt's native drag-and-drop protocol. Cross-application
 drags require drag-and-drop support in the compositor and receiving application.
+
+## Command manuals and related projects
+
+Basic manuals: [fsvr.1](docs/man/fsvr.1). After installation, use `man fsvr`.
+
+Part of the [de-xr desktop](https://github.com/topics/de-xr):
+[DomeD](https://github.com/jebot-git/DomeD) provides the desktop/session,
+[Ghostty XR](https://github.com/jebot-git/ghostty-xr) the terminal,
+[mpvr](https://github.com/jebot-git/mpvr) video playback,
+[fsvr](https://github.com/jebot-git/fsv-xr) file browsing,
+[qimgvr](https://github.com/jebot-git/qimgvr) image viewing,
+[Arc SBS](https://github.com/jebot-git/arc-sbs) depth conversion, and
+[LightXR](https://github.com/jebot-git/LightXR) the optional login manager.
+Each application has its own dependencies and can be used independently where
+its selected backend permits.

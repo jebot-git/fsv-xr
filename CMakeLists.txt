@@ -54,3 +54,5 @@ if(BUILD_TESTING)
     add_test(NAME ui COMMAND fsv-ui-tests)
   endif()
 endif()
+
+install(FILES docs/man/fsvr.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
