@@ -42,6 +42,8 @@ meson configure builddir --buildtype=release -Db_lto=true -Db_ndebug=if-release
 The system install provides **fsvr** in the application menu, plus **fsvr
 (OpenXR)** when standalone XR is built. Keep `/usr/local/bin` in the desktop
 session's `PATH`. A per-user alternative is `cmake --install build --prefix "$HOME/.local"`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
+Inside DomeD, fsvr exports File, Edit, View, Go, Window and Help menus to the
+universal menu strip; Super+F10 opens it and Ctrl+L edits the location.
 Desktop launches retain desktop presentation; XR launches use transparent scenes
 and native context menus, including when a headset is already active. Its menu actions can explicitly select desktop or the
 current DomeD session. The OpenXR entry starts its own headset session using the

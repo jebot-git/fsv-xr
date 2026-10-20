@@ -5,8 +5,8 @@ deps = dependency('qt6', version: '>=6.8', modules: ['Core', 'Gui', 'Widgets', '
 xr = dependency('qt6', version: '>=6.10', modules: ['Quick3DXr'], required: get_option('xr'))
 archive_dep = dependency('libarchive')
 resources = qt.preprocess(qresources: 'src/qt/resources.qrc')
-moc = qt.preprocess(moc_headers: ['src/qt/filesystem.h', 'src/qt/branchgeometry.h', 'src/qt/gestures.h', 'src/qt/domed.h', 'src/qt/appearance.h'])
-executable('fsvr', ['src/qt/archivebrowser.cpp', 'src/qt/archives.cpp', 'src/qt/main.cpp', 'src/qt/domed.cpp', 'src/qt/appearance.cpp', 'src/qt/filesystem.cpp', 'src/qt/launchcontext.cpp', 'src/qt/filesystemindex.cpp', 'src/qt/trash.cpp', 'src/qt/treelayout.cpp', 'src/qt/branchgeometry.cpp', 'src/qt/thumbnail.cpp', 'src/qt/gestures.cpp', resources, moc],
+moc = qt.preprocess(moc_headers: ['src/qt/filesystem.h', 'src/qt/branchgeometry.h', 'src/qt/gestures.h', 'src/qt/domed.h', 'src/qt/domemenu.h', 'src/qt/appearance.h'])
+executable('fsvr', ['src/qt/archivebrowser.cpp', 'src/qt/archives.cpp', 'src/qt/main.cpp', 'src/qt/domed.cpp', 'src/qt/domemenu.cpp', 'src/qt/appearance.cpp', 'src/qt/filesystem.cpp', 'src/qt/launchcontext.cpp', 'src/qt/filesystemindex.cpp', 'src/qt/trash.cpp', 'src/qt/treelayout.cpp', 'src/qt/branchgeometry.cpp', 'src/qt/thumbnail.cpp', 'src/qt/gestures.cpp', resources, moc],
   dependencies: [deps, xr, archive_dep], cpp_args: ['-DFSV_HAS_XR=' + (xr.found() ? '1' : '0')], install: true)
 install_data('data/org.fsvxr.fsvr.desktop', install_dir: get_option('datadir') / 'applications')
 if xr.found()

@@ -12,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QPainter>
+#include <QClipboard>
 #include <QStandardPaths>
 #include <QMimeData>
 #include <QDragEnterEvent>
@@ -25,6 +26,37 @@ class UiTest : public QObject {
         return nullptr;
     }
 private slots:
+    void nativeMenuCommandsPreserveTextEditing() {
+        QTemporaryDir temp;
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
+        auto *browser = window->findChild<QObject *>("fileBrowser"); QVERIFY(browser);
+        auto *location = window->findChild<QQuickItem *>("locationField"); QVERIFY(location);
+        auto command = [browser](const QString &name) {
+            return QMetaObject::invokeMethod(browser, "menuCommand", Q_ARG(QVariant, name));
+        };
+        QVERIFY(command("location"));
+        QVERIFY(location->hasActiveFocus());
+        QVERIFY(command("copy"));
+        QCOMPARE(QGuiApplication::clipboard()->text(), temp.path());
+        QGuiApplication::clipboard()->setText("editing text");
+        QVERIFY(command("paste"));
+        QCOMPARE(location->property("text").toString(), QString("editing text"));
+        QVERIFY(command("cut")); // The text field owns this command, with no file selection.
+        QCOMPARE(files.root(), temp.path());
+        browser->setProperty("zoom", 2.0);
+        browser->setProperty("yaw", 30.0);
+        QVERIFY(command("resetView"));
+        QCOMPARE(browser->property("zoom").toDouble(), 1.0);
+        QCOMPARE(browser->property("yaw").toDouble(), 0.0);
+    }
     void inspectorButtonsStayInsideFrame() {
         QTemporaryDir temp;
         QFile file(temp.filePath(QString(180, 'x') + ".txt"));

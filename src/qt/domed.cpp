@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "domed.h"
+#include "domemenu.h"
 #include "filesystem.h"
 #include "thumbnail.h"
 #include "appearance.h"
@@ -21,6 +22,13 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) 
     setMouseTracking(true);
     setAttribute(Qt::WA_TranslucentBackground);
     resize(1280, 820);
+    // Keep the raster surface as the real translucent toplevel. Qt publishes
+    // this menu through the registrar and associates it with that surface.
+    auto *menus = new DomeMenu(files, this);
+    menus->setVisible(menus->isNativeMenuBar());
+    connect(menus, &DomeMenu::commandRequested, this, [this](const QString &command) {
+        if (m_scene.rootObject()) QMetaObject::invokeMethod(m_scene.rootObject(), "menuCommand", Q_ARG(QVariant, command));
+    });
     // The offscreen renderer must not keep a closed file-manager process alive.
     m_scene.setAttribute(Qt::WA_QuitOnClose, false);
     m_scene.setMouseTracking(true);
@@ -35,8 +43,13 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) 
     m_scene.setSource(QUrl("qrc:/qml/Browser.qml"));
     if (m_scene.rootObject()) {
         m_scene.rootObject()->setProperty("spatialPopups", spatial);
+        m_scene.rootObject()->setProperty("nativeMenus", true);
         connect(m_scene.rootObject(), SIGNAL(contextMenuRequested(QPointF)), this, SLOT(showContextMenu(QPointF)));
     }
+    connect(m_scene.quickWindow(), &QQuickWindow::activeFocusItemChanged, menus, [this, menus] {
+        auto *focus = m_scene.quickWindow()->activeFocusItem();
+        menus->setTextEditing(focus && focus->metaObject()->indexOfMethod("copy()") >= 0);
+    });
     connect(files, &FileSystem::selectedChanged, this, [this] {
         // A reset, refresh, or another selection invalidates menu actions.
         if (m_menu) m_menu->close();
@@ -166,6 +179,7 @@ bool DomeWindow::event(QEvent *event)
     switch (event->type()) {
     case QEvent::DragEnter: case QEvent::DragMove: case QEvent::DragLeave: case QEvent::Drop:
     case QEvent::MouseButtonPress: case QEvent::MouseButtonRelease: case QEvent::MouseButtonDblClick:
+    case QEvent::ShortcutOverride:
     case QEvent::MouseMove: case QEvent::Wheel: case QEvent::KeyPress: case QEvent::KeyRelease:
     case QEvent::FocusIn: case QEvent::FocusOut: case QEvent::Enter: case QEvent::Leave:
     case QEvent::WindowActivate: case QEvent::WindowDeactivate:

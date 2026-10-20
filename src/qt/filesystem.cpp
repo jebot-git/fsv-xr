@@ -624,7 +624,11 @@ void FileSystem::clipboard(bool cut)
     mime->setData("x-special/gnome-copied-files", (cut ? QByteArray("cut\n") : QByteArray("copy\n")) + QUrl::fromLocalFile(selectedPath()).toEncoded());
     QGuiApplication::clipboard()->setMimeData(mime);
 }
-bool FileSystem::canPaste() const { return !inArchive() && !inTrash() && QGuiApplication::clipboard()->mimeData()->hasUrls(); }
+bool FileSystem::canPaste() const
+{
+    const auto *data = QGuiApplication::clipboard()->mimeData();
+    return !inArchive() && !inTrash() && data && data->hasUrls();
+}
 
 QString FileSystem::copyEntry(const QString &source, const QString &destination)
 {

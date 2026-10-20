@@ -6,6 +6,7 @@ import QtQuick.Layouts
 ThemedPanel {
     id: strip
     implicitHeight: 40
+    property bool shortcutsEnabled: true
     function revealCurrent() {
         const tab = repeater.itemAt(files.currentTab)
         if (!tab) return
@@ -96,8 +97,8 @@ ThemedPanel {
         function onTabsChanged() { Qt.callLater(strip.revealCurrent) }
         function onCurrentTabChanged() { Qt.callLater(strip.revealCurrent) }
     }
-    Shortcut { sequence: "Ctrl+T"; enabled: !files.operating; onActivated: files.newTab() }
-    Shortcut { sequence: "Ctrl+W"; enabled: !files.operating; onActivated: files.closeTab(files.currentTab) }
-    Shortcut { sequence: "Ctrl+Tab"; enabled: !files.operating; onActivated: files.activateTab((files.currentTab + 1) % files.tabs.length) }
-    Shortcut { sequence: "Ctrl+Shift+Tab"; enabled: !files.operating; onActivated: files.activateTab((files.currentTab + files.tabs.length - 1) % files.tabs.length) }
+    Shortcut { sequence: "Ctrl+T"; enabled: strip.shortcutsEnabled && !files.operating; onActivated: files.newTab() }
+    Shortcut { sequence: "Ctrl+W"; enabled: strip.shortcutsEnabled && !files.operating; onActivated: files.closeTab(files.currentTab) }
+    Shortcut { sequence: "Ctrl+Tab"; enabled: strip.shortcutsEnabled && !files.operating; onActivated: files.activateTab((files.currentTab + 1) % files.tabs.length) }
+    Shortcut { sequence: "Ctrl+Shift+Tab"; enabled: strip.shortcutsEnabled && !files.operating; onActivated: files.activateTab((files.currentTab + files.tabs.length - 1) % files.tabs.length) }
 }

@@ -183,6 +183,31 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
             code = xd.keysym_to_keycode(XK.string_to_keysym(name))
             for kind in (X.KeyPress, X.KeyRelease):
                 xtest.fake_input(xd, kind, code); xd.sync(); time.sleep(.03)
+        def chord(*names):
+            codes = [xd.keysym_to_keycode(XK.string_to_keysym(name)) for name in names]
+            for code in codes:
+                xtest.fake_input(xd, X.KeyPress, code); xd.sync(); time.sleep(.03)
+            for code in reversed(codes):
+                xtest.fake_input(xd, X.KeyRelease, code); xd.sync(); time.sleep(.03)
+        # Qt must associate the native menu with the actual raster toplevel.
+        export = wait(lambda: re.findall(r'org_kde_kwin_appmenu#\d+\.set_address\("([^"]+)", "([^"]+)"\)', (out / "client.log").read_text()))[-1]
+        layout = subprocess.check_output(["gdbus", "call", "--session", "--dest", export[0],
+            "--object-path", export[1], "--method", "com.canonical.dbusmenu.GetLayout", "--", "0", "-1", "[]"], env=env, text=True)
+        for label in ("New Tab", "Create Folder", "Copy Location", "Layout", "Next Tab"):
+            assert label in layout, (label, layout)
+        # Open File through DomeD's keyboard navigation and invoke New Tab.
+        # This crosses compositor input, DBusMenu and the live fsvr model.
+        tab_strip = (0, 72, before.width, 108)
+        original_tabs = frame().crop(tab_strip).convert("RGB")
+        chord("Super_L", "F10"); key("Right"); key("Right"); key("Home"); key("Return")
+        def tabs_changed():
+            image = frame().crop(tab_strip).convert("RGB")
+            return ImageChops.difference(original_tabs, image).getbbox() is not None
+        wait(tabs_changed)
+        time.sleep(.3)
+        chord("Control_L", "w")
+        wait(lambda: ImageChops.difference(original_tabs, frame().crop(tab_strip).convert("RGB")).getbbox() is None)
+        click(0x110)  # Restore the file selection after closing the temporary tab.
         click(0x111)
         menu = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is not None), None))
         assert menu["root"] == wid and menu["parent"] == wid, menu
@@ -415,7 +440,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         close_window()
         heartbeat_stop.set(); pulse.join(timeout=2)
         xd.close()
-        print("PASS: Vulkan/DomeD changed-frame capture; persistent inspector without preview popups; live theme; native context menus, Properties/Escape, oversized menus; Trash Restore; desktop/XR launch realms; FileManager1; physical navigation and double-click; cleanup")
+        print("PASS: Vulkan/DomeD changed-frame capture; persistent inspector without preview popups; live theme; native universal menu export and keyboard dispatch, context menus, Properties/Escape, oversized menus; Trash Restore; desktop/XR launch realms; FileManager1; physical navigation and double-click; cleanup")
     finally:
         heartbeat_stop.set()
         if dome is not None and dome.poll() is None:

@@ -89,3 +89,22 @@ background tilt, RMB menus, MMB drag and scroll-button zoom, wheel zoom, and
 folder double-click. It also checks MIME defaults, FileManager1 requests,
 Super+E, inherited socket FDs and desktop launches while XR owns input.
 This is an automated compositor/input test, not a physical-headset test.
+
+## Universal menus
+
+fsvr exports a native Qt menu bar through DBusMenu and Qt's per-surface Wayland
+appmenu association in both DomeD realms. File, Edit, View, Go, Window and Help
+publish file operations, tabs, navigation and mutually exclusive layout choices.
+Selection, clipboard, busy state and location changes update the exported actions.
+DomeD merges its application and window controls, including desktop/XR destinations;
+fsvr does not override compositor placement or menu navigation.
+
+Use **Super+F10** to enter DomeD's menu strip, arrow keys to navigate, Enter to
+activate and Escape to dismiss. **Ctrl+L** focuses and selects the location field;
+clipboard menu commands operate on focused text fields while editing. File actions
+reuse fsvr's existing dialogs, including permanent-deletion confirmation. Native
+menu shortcuts replace duplicate Quick shortcuts only in the DomeD bridge. The
+ordinary desktop and standalone OpenXR interfaces retain their Quick shortcuts.
+
+The integration test also verifies the Wayland menu address, exported commands,
+keyboard activation through DomeD's menu strip, and closing the resulting tab.

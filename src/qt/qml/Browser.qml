@@ -6,6 +6,7 @@ import QtQuick3D
 
 ThemedPanel {
     id: window
+    objectName: "fileBrowser"
     width: 1280; height: 820
     color: spatialPopups ? "transparent" : Theme.sceneBackground
     property real zoom: 1
@@ -14,6 +15,25 @@ ThemedPanel {
     property real panZ: 0
     property real yaw: 0
     property real pitch: 0
+    property bool nativeMenus: false
+    // Menu callbacks and keyboard shortcuts share the existing dialogs. Text
+    // editing keeps clipboard ownership instead of changing selected files.
+    function menuCommand(command) {
+        const focus = Window.window ? Window.window.activeFocusItem : null
+        if (["cut", "copy", "paste"].includes(command)) {
+            if (focus && typeof focus[command] === "function") focus[command]()
+            else if (!files.busy && !files.inTrash && !files.inArchive) {
+                if (command === "paste") files.paste()
+                else if (files.selected >= 0) files.clipboard(command === "cut")
+            }
+        } else if (command === "location") { location.forceActiveFocus(); location.selectAll() }
+        else if (command === "properties") showInspector()
+        else if (command === "delete") actions.confirmRemoval()
+        else if (command === "emptyTrash") actions.confirmEmptyTrash()
+        else if (command === "resetView") resetView()
+        else actions.edit(command)
+    }
+    function resetView() { zoom = 1; panX = 0; panY = 0; panZ = 0; yaw = 0; pitch = 0 }
     property bool spatialPopups: false
     property bool viewReady: false
     property bool restoringView: false
@@ -85,12 +105,13 @@ ThemedPanel {
                 currentIndex: ["map", "tree", "disc"].indexOf(files.layout)
                 onActivated: files.layout = ["map", "tree", "disc"][currentIndex]
             }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset View"; onClicked: { window.zoom = 1; window.panX = 0; window.panY = 0; window.panZ = 0; window.yaw = 0; window.pitch = 0 } }
+            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset View"; onClicked: window.resetView() }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
         }
     }
     Tabs {
         id: tabs
+        shortcutsEnabled: !window.nativeMenus
         anchors { left: parent.left; right: parent.right; top: toolbar.bottom }
         height: implicitHeight
     }
@@ -260,12 +281,12 @@ ThemedPanel {
         padding: 8; color: Theme.text; wrapMode: Text.WordWrap
     }
     FileActions { id: actions; objectName: "fileActions"; anchors.fill: parent; onInspectorRequested: window.showInspector() }
-    Shortcut { sequence: "Ctrl+C"; onActivated: files.clipboard(false) }
-    Shortcut { sequence: "Ctrl+X"; onActivated: files.clipboard(true) }
-    Shortcut { sequence: "Ctrl+V"; onActivated: files.paste() }
-    Shortcut { sequence: "F2"; onActivated: actions.edit("rename") }
-    Shortcut { sequence: "Delete"; onActivated: { if (files.inArchive) return; if (files.inTrash) actions.confirmRemoval(); else files.remove(false) } }
-    Shortcut { sequence: "Ctrl+Shift+N"; onActivated: actions.edit("mkdir") }
-    Shortcut { sequence: "Alt+Up"; onActivated: files.up() }
-    Shortcut { sequence: "F5"; onActivated: files.refresh() }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Ctrl+C"; onActivated: files.clipboard(false) }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Ctrl+X"; onActivated: files.clipboard(true) }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Ctrl+V"; onActivated: files.paste() }
+    Shortcut { enabled: !window.nativeMenus; sequence: "F2"; onActivated: actions.edit("rename") }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Delete"; onActivated: { if (files.inArchive) return; if (files.inTrash) actions.confirmRemoval(); else files.remove(false) } }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Ctrl+Shift+N"; onActivated: actions.edit("mkdir") }
+    Shortcut { enabled: !window.nativeMenus; sequence: "Alt+Up"; onActivated: files.up() }
+    Shortcut { enabled: !window.nativeMenus; sequence: "F5"; onActivated: files.refresh() }
 }
