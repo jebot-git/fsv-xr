@@ -184,7 +184,13 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
             if (actions) QMetaObject::invokeMethod(actions, "edit", Q_ARG(QVariant, operation));
         });
     };
-    if (m_files->inTrash()) {
+    if (m_files->inArchive()) {
+        const bool canOpen = selected && m_files->selection().value("canOpen").toBool();
+        item("Open", canOpen, [this] { m_files->open(m_files->selected()); });
+        item("Open in New Tab", selected && (m_files->selection().value("directory").toBool() || m_files->selection().value("archive").toBool()), [this] { m_files->newTab(m_files->selection().value("path").toString()); });
+        item("Open With…", canOpen && !m_files->selection().value("directory").toBool(), [edit] { edit("openWith"); });
+        item("Copy Location", selected, [this] { m_files->copyLocation(); });
+    } else if (m_files->inTrash()) {
         item("Restore", selected && m_files->selection().value("canRestore").toBool(), [this] { m_files->restore(); });
         item("Empty Trash…", true, [this] {
             QTimer::singleShot(0, this, [this] {
@@ -196,9 +202,11 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
         menu->addSeparator();
     } else {
     item("Open", selected, [this] { m_files->open(m_files->selected()); });
-    item("Open in New Tab", selected && m_files->selection().value("directory").toBool(), [this] { m_files->newTab(m_files->selection().value("path").toString()); });
-    if (m_files->selection().value("archive").toBool())
+    item("Open in New Tab", selected && (m_files->selection().value("directory").toBool() || m_files->selection().value("archive").toBool()), [this] { m_files->newTab(m_files->selection().value("path").toString()); });
+    if (m_files->selection().value("archive").toBool()) {
+        item("Browse Archive", true, [this] { m_files->browseArchive(); });
         item("Extract Archive", !m_files->busy(), [this] { m_files->extractArchive(); });
+    }
     item("Compress…", selected && !m_files->busy(), [edit] { edit("compress"); });
     item("Open With…", selected && !m_files->selection().value("directory").toBool(), [edit] { edit("openWith"); });
     menu->addSeparator();
@@ -210,7 +218,7 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     item("Rename…", selected, [edit] { edit("rename"); });
     item("Move to Trash", selected, [this] { m_files->remove(false); });
     }
-    item("Delete Permanently…", selected, [this] {
+    if (!m_files->inArchive()) item("Delete Permanently…", selected, [this] {
         QTimer::singleShot(0, this, [this] {
             if (m_preview) m_preview->close();
             auto *actions = m_scene.rootObject()->findChild<QObject *>("fileActions");
@@ -218,7 +226,7 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
         });
     });
     menu->addSeparator();
-    if (!m_files->inTrash()) {
+    if (!m_files->inTrash() && !m_files->inArchive()) {
     item("Create Folder…", true, [edit] { edit("mkdir"); });
     item("Open Terminal Here", true, [this] { m_files->terminal(); });
     }

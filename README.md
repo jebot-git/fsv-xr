@@ -152,7 +152,30 @@ Both operations run in a worker and refresh the view when finished. Failed
 operations remove temporary output. Hidden files and empty folders are included;
 links and special files are rejected. Extraction rejects absolute paths and parent
 traversal, and is limited to 100,000 entries and 10 GiB of uncompressed data.
-Encrypted archives and editing or browsing archive contents are not supported.
+Double-click a supported archive (or use **Browse Archive**) to explore it in
+Map, Tree, or Disc. Archive folders support tabs and Up; Up from the archive root
+returns to its containing filesystem folder. The location field and Copy Location
+use `archive:/absolute/path.zip#folder/member` URLs, with reserved characters
+encoded. These URLs also work when passed to fsvr directly. **Open With…** on the
+archive itself still launches an external application.
+
+Archive browsing is read-only: rename, delete, clipboard file transfers, drag/drop,
+compression and folder creation are unavailable inside archives. Links and special
+files are visible but cannot be opened or followed. Directory entries omitted by
+an archive are inferred from member paths. Views retain the usual 2,500-entry,
+five-level display limit; open a folder to explore deeper. A bounded in-memory
+member index avoids repeated archive scans; file changes and F5 revalidate it.
+No full extraction is needed to list members. Compressed tar archives can still
+require a sequential pass, so very large archives may take time to index.
+
+File cards show MIME/name tiles. Selecting a regular file loads its inspector
+preview on demand, and Open/Open With launches a private temporary copy. Copies
+are limited to 64 MiB per file and 256 MiB (4,096 files) per application session;
+extract the archive normally for larger files. Temporary copies remain available
+until fsvr exits; edits to them do not update the archive. Browsing also limits
+metadata to 100,000 entries, 16 MiB of names, paths of 4,096 characters / 128
+separators, and 10 GiB of declared uncompressed data. Encrypted archives, nested
+archive browsing, and modifying archive contents are not supported.
 
 Image formats supported by Qt, text, JSON, XML, valid freedesktop thumbnail caches,
 and installed MIME-matching `.thumbnailer` programs supply previews. Install image

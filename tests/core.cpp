@@ -18,11 +18,46 @@
 #include <QElapsedTimer>
 #include <QRectF>
 #include <QStandardPaths>
+#include <QScopeGuard>
+
+class ArchiveOpenReceiver : public QObject {
+    Q_OBJECT
+public:
+    QUrl url;
+public slots:
+    void receive(const QUrl &value) { url = value; }
+};
 
 class CoreTest : public QObject {
     Q_OBJECT
     static void put(const QString &path, QByteArray content = "sample") {
         QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(content), content.size());
+    }
+    struct ArchiveItem { QString name; QByteArray data; int type = AE_IFREG; QString link; };
+    static void pack(const QString &path, const QList<ArchiveItem> &items) {
+        auto *writer = archive_write_new();
+        if (path.endsWith(".zip")) QCOMPARE(archive_write_set_format_zip(writer), ARCHIVE_OK);
+        else {
+            QCOMPARE(archive_write_set_format_pax_restricted(writer), ARCHIVE_OK);
+            if (path.endsWith(".gz")) QCOMPARE(archive_write_add_filter_gzip(writer), ARCHIVE_OK);
+        }
+        QCOMPARE(archive_write_open_filename(writer, QFile::encodeName(path).constData()), ARCHIVE_OK);
+        for (const auto &item : items) {
+            auto *entry = archive_entry_new();
+            archive_entry_set_pathname_utf8(entry, item.name.toUtf8().constData());
+            archive_entry_set_filetype(entry, item.type); archive_entry_set_perm(entry, 0644);
+            archive_entry_set_size(entry, item.data.size()); archive_entry_set_mtime(entry, 1700000000, 0);
+            if (!item.link.isEmpty()) archive_entry_set_symlink(entry, item.link.toUtf8().constData());
+            QCOMPARE(archive_write_header(writer, entry), ARCHIVE_OK);
+            if (!item.data.isEmpty()) QCOMPARE(archive_write_data(writer, item.data.constData(), item.data.size()), item.data.size());
+            archive_entry_free(entry);
+        }
+        QCOMPARE(archive_write_close(writer), ARCHIVE_OK); archive_write_free(writer);
+    }
+    static int namedRow(FileSystem &files, const QString &name) {
+        for (int i = 0; i < files.rowCount(); ++i)
+            if (files.data(files.index(i), FileSystem::Name).toString() == name) return i;
+        return -1;
     }
     static QList<QVector3D> hand() {
         QList<QVector3D> joints(26, QVector3D(0, 12, 0));
@@ -32,6 +67,126 @@ class CoreTest : public QObject {
         return joints;
     }
 private slots:
+    void archiveBrowsing_data() {
+        QTest::addColumn<QString>("suffix");
+        QTest::newRow("zip") << QString(".zip");
+        QTest::newRow("tar-gzip") << QString(".tar.gz");
+    }
+    void archiveBrowsing() {
+        QFETCH(QString, suffix);
+        QTemporaryDir temp;
+        const QString path = temp.filePath("packed # % ? 漢字" + suffix);
+        const QString filename = "nested/deep/hello # % ? 漢字.txt";
+        pack(path, {{filename, "payload"}, {"empty", {}, AE_IFDIR}, {"link", {}, AE_IFLNK, "../../outside"}});
+        const QString root = Archives::location(path);
+        QVERIFY(Archives::validLocation(root)); QCOMPARE(Archives::source(root), path);
+        const QString member = Archives::location(path, filename);
+        QCOMPARE(Archives::member(member), filename);
+        QVERIFY(!Archives::validLocation(Archives::location(path, "../escape")));
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto listing = Archives::browse(root, cancel);
+        QCOMPARE(listing.entries.size(), 5);
+        QVERIFY(listing.warning.startsWith("Read-only archive."));
+        qint64 rootBytes = 0;
+        for (int i = 0; i < listing.entries.size(); ++i) {
+            const auto &entry = listing.entries[i];
+            QVERIFY(entry.parent < i);
+            if (entry.name == "nested") { QVERIFY(entry.directory); QCOMPARE(entry.bytes, 7); }
+            if (entry.name == "link") QVERIFY(entry.symlink);
+            if (entry.name == "hello # % ? 漢字.txt") { QCOMPARE(entry.depth, 2); QCOMPARE(entry.mime, QString("text/plain")); }
+            if (entry.parent < 0) rootBytes += entry.bytes;
+        }
+        QCOMPARE(rootBytes, 7);
+        const auto copy = Archives::materialize(member); QVERIFY2(copy.error.isEmpty(), qPrintable(copy.error));
+        QFile content(copy.path); QVERIFY(content.open(QIODevice::ReadOnly)); QCOMPARE(content.readAll(), QByteArray("payload"));
+        QCOMPARE(QFileInfo(copy.path).fileName(), QString("hello # % ? 漢字.txt"));
+        QCOMPARE(Archives::materialize(member).path, copy.path);
+        QVERIFY(!Archives::materialize(Archives::location(path, "link")).error.isEmpty());
+        QVERIFY(!QFileInfo::exists(temp.filePath("nested")));
+        FileSystem files;
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
+        const int archiveRow = namedRow(files, QFileInfo(path).fileName()); QVERIFY(archiveRow >= 0);
+        files.open(archiveRow); QTRY_VERIFY(!files.busy());
+        QVERIFY(files.inArchive()); QCOMPARE(files.root(), root); QCOMPARE(files.rowCount(), 5);
+        for (const auto &layout : {"map", "tree", "disc"}) {
+            files.setLayout(layout);
+            for (int i = 0; i < files.rowCount(); ++i) QVERIFY(files.data(files.index(i), FileSystem::Extent).value<QVector3D>().x() > 0);
+        }
+        files.setLayout("tree"); QCOMPARE(files.treeRoot().value("name").toString(), QFileInfo(path).fileName());
+        QVERIFY(files.tabs()[0].toMap().value("title").toString() == QFileInfo(path).fileName());
+        files.setSelected(namedRow(files, "link")); QVERIFY(!files.selection().value("canOpen").toBool());
+        QSignalSpy errors(&files, &FileSystem::error); files.open(files.selected()); QCOMPARE(errors.size(), 1);
+        files.setSelected(namedRow(files, "hello # % ? 漢字.txt"));
+        QVERIFY(!files.selection().value("archive").toBool()); QVERIFY(files.selection().value("canOpen").toBool());
+        ArchiveOpenReceiver receiver;
+        QDesktopServices::setUrlHandler("file", &receiver, "receive");
+        auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
+        files.open(files.selected()); QTRY_VERIFY(!files.busy());
+        QVERIFY(receiver.url.isLocalFile()); QCOMPARE(receiver.url.toLocalFile(), copy.path);
+        files.rename("changed"); files.remove(true); files.remove(false); files.newFolder("new"); files.compress("new.zip");
+        files.extractArchive(); files.paste(); files.startDrag(); files.clipboard(true);
+        QVERIFY(!files.operating()); QVERIFY(!files.canPaste()); QVERIFY(files.dropDirectory(files.selected()).isEmpty());
+        QVERIFY(!files.canDrop({QUrl::fromLocalFile(path)}, temp.path()));
+        QCOMPARE(errors.size(), 1); QVERIFY(QFileInfo::exists(path));
+        files.newTab(Archives::location(path, "nested/deep")); QTRY_VERIFY(!files.busy());
+        QCOMPARE(files.rowCount(), 1); QCOMPARE(files.currentTab(), 1);
+        files.up(); QTRY_VERIFY(!files.busy()); QCOMPARE(files.root(), Archives::location(path, "nested"));
+        files.up(); QTRY_VERIFY(!files.busy()); QCOMPARE(files.root(), root);
+        files.up(); QTRY_VERIFY(!files.busy()); QCOMPARE(files.root(), temp.path()); QVERIFY(!files.inArchive());
+        files.activateTab(0); QTRY_VERIFY(!files.busy()); QCOMPARE(files.root(), root);
+        files.openLocation(member); QTRY_VERIFY(!files.busy());
+        QCOMPARE(files.root(), Archives::location(path, "nested/deep")); QCOMPARE(files.selection().value("path").toString(), member);
+        QSignalSpy properties(&files, &FileSystem::propertiesRequested);
+        files.openLocation(member, true, true); QTRY_VERIFY(!files.busy());
+        QCOMPARE(properties.size(), 1); QCOMPARE(files.selection().value("path").toString(), member);
+        *cancel = true; QVERIFY(Archives::browse(root, cancel).entries.isEmpty());
+    }
+    void archiveBrowseInvalidationAndLimits() {
+        QTemporaryDir temp;
+        const QString path = temp.filePath("update.tar.gz");
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        pack(path, {{"old.txt", "old"}});
+        QCOMPARE(Archives::browse(Archives::location(path), cancel).entries[0].name, QString("old.txt"));
+        const auto first = Archives::materialize(Archives::location(path, "old.txt")); QVERIFY(first.error.isEmpty());
+        QVERIFY(QFile::remove(path)); pack(path, {{"new.txt", "new contents"}});
+        const auto updated = Archives::browse(Archives::location(path), cancel);
+        QCOMPARE(updated.entries.size(), 1); QCOMPARE(updated.entries[0].name, QString("new.txt"));
+        QVERIFY(!Archives::materialize(Archives::location(path, "old.txt")).error.isEmpty());
+        pack(temp.filePath("duplicate.tar"), {{"x", "one"}, {"./x", "two"}});
+        const auto duplicate = Archives::browse(Archives::location(temp.filePath("duplicate.tar")), cancel);
+        QVERIFY(duplicate.entries.isEmpty()); QVERIFY(duplicate.warning.contains("Duplicate"));
+        pack(temp.filePath("conflict.tar"), {{"parent", "file"}, {"parent/child", "data"}});
+        QVERIFY(Archives::browse(Archives::location(temp.filePath("conflict.tar")), cancel).entries.isEmpty());
+        pack(temp.filePath("unsafe.tar"), {{"../escape", "data"}});
+        const auto unsafe = Archives::browse(Archives::location(temp.filePath("unsafe.tar")), cancel);
+        QVERIFY(unsafe.entries.isEmpty()); QVERIFY(unsafe.warning.contains("Unsafe"));
+        put(temp.filePath("broken.zip"), "not an archive");
+        QVERIFY(Archives::browse(Archives::location(temp.filePath("broken.zip")), cancel).entries.isEmpty());
+        QVERIFY(!Archives::materialize(Archives::location(temp.filePath("broken.zip"), "x")).error.isEmpty());
+        const QString deep = QString("folder/").repeated(7) + "file.txt";
+        pack(temp.filePath("deep.tar"), {{deep, "deep"}});
+        const auto limited = Archives::browse(Archives::location(temp.filePath("deep.tar")), cancel);
+        QCOMPARE(limited.entries.size(), 5); QVERIFY(limited.warning.contains("View limited"));
+        const auto deeper = Archives::browse(Archives::location(temp.filePath("deep.tar"), QString("folder/").repeated(6).chopped(1)), cancel);
+        QCOMPARE(deeper.entries.size(), 2);
+        pack(temp.filePath("large.tar.gz"), {{"large.txt", QByteArray(64 * 1024 * 1024 + 1, 'x')}});
+        const auto large = Archives::materialize(Archives::location(temp.filePath("large.tar.gz"), "large.txt"));
+        QVERIFY(large.path.isEmpty()); QVERIFY(large.error.contains("64 MiB"));
+    }
+    void archivePreview() {
+        QTemporaryDir temp;
+        QImage image(16, 16, QImage::Format_RGB32); image.fill(Qt::red);
+        QByteArray data; QBuffer buffer(&data); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(image.save(&buffer, "PNG"));
+        const QString path = temp.filePath("images.zip"); pack(path, {{"folder/red.png", data}});
+        const QString member = Archives::location(path, "folder/red.png");
+        ThumbnailProvider provider; QSize size;
+        QString url = ThumbnailProvider::url(member, -1, true);
+        auto preview = provider.requestImage(url.mid(QString("image://thumbnail/").size()), &size, QSize(50, 50));
+        QVERIFY(!preview.isNull()); QCOMPARE(preview.pixelColor(0, 0), QColor(Qt::red));
+        url = ThumbnailProvider::url(member);
+        preview = provider.requestImage(url.mid(QString("image://thumbnail/").size()), &size, QSize(50, 50));
+        QVERIFY(!preview.isNull()); QVERIFY(preview.pixelColor(0, 0) != QColor(Qt::red));
+    }
     void archiveRoundTrips_data() {
         QTest::addColumn<QString>("suffix");
         QTest::newRow("zip") << QString(".zip");

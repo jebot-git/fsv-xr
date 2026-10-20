@@ -159,7 +159,7 @@ ThemedPanel {
                         rotating = event.button === Qt.LeftButton
                             && (!hit.objectHit || !!(event.modifiers & Qt.AltModifier))
                     }
-                    fileDrag = event.button === Qt.LeftButton && !rotating && files.selected >= 0 && !files.busy && !files.inTrash
+                    fileDrag = event.button === Qt.LeftButton && !rotating && files.selected >= 0 && !files.busy && !files.inTrash && !files.inArchive
                     if (event.button === Qt.RightButton) {
                         const point = mouse.mapToItem(window, event.x, event.y)
                         window.showActionsAt(point.x, point.y)
@@ -258,7 +258,6 @@ ThemedPanel {
     Label { palette: Theme.controlPalette(Theme.paletteRevision);
         id: status
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-        height: visible ? implicitHeight : 0
         visible: text.length > 0
         text: files.warning
         padding: 8; color: Theme.text; wrapMode: Text.WordWrap
@@ -268,7 +267,7 @@ ThemedPanel {
     Shortcut { sequence: "Ctrl+X"; onActivated: files.clipboard(true) }
     Shortcut { sequence: "Ctrl+V"; onActivated: files.paste() }
     Shortcut { sequence: "F2"; onActivated: actions.edit("rename") }
-    Shortcut { sequence: "Delete"; onActivated: { if (files.inTrash) actions.confirmRemoval(); else files.remove(false) } }
+    Shortcut { sequence: "Delete"; onActivated: { if (files.inArchive) return; if (files.inTrash) actions.confirmRemoval(); else files.remove(false) } }
     Shortcut { sequence: "Ctrl+Shift+N"; onActivated: actions.edit("mkdir") }
     Shortcut { sequence: "Alt+Up"; onActivated: files.up() }
     Shortcut { sequence: "F5"; onActivated: files.refresh() }

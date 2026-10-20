@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "thumbnail.h"
+#include "archives.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QDir>
@@ -12,11 +13,12 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
-QString ThumbnailProvider::url(const QString &path, qint64 modifiedMs)
+QString ThumbnailProvider::url(const QString &path, qint64 modifiedMs, bool archivePreview)
 {
     // Base64 keeps #, ?, %, and non-ASCII filenames intact through QML URL handling.
     return "image://thumbnail/" + QString::fromLatin1(path.toUtf8().toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals))
-        + '/' + QString::number(modifiedMs < 0 ? QFileInfo(path).lastModified().toMSecsSinceEpoch() : modifiedMs);
+        + '/' + QString::number(modifiedMs < 0 ? QFileInfo(Archives::isLocation(path) ? Archives::source(path) : path).lastModified().toMSecsSinceEpoch() : modifiedMs)
+        + (archivePreview ? "/preview" : "");
 }
 static QImage readImage(const QString &path, const QSize &size)
 {
@@ -73,13 +75,18 @@ static QString expandArgument(const QString &arg, const QString &path, const QSt
 }
 QImage ThumbnailProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
 {
-    const QString path = QString::fromUtf8(QByteArray::fromBase64(id.section('/', 0, 0).toLatin1(), QByteArray::Base64UrlEncoding));
+    const QString original = QString::fromUtf8(QByteArray::fromBase64(id.section('/', 0, 0).toLatin1(), QByteArray::Base64UrlEncoding));
+    const bool archived = Archives::isLocation(original);
+    QString path = original;
+    if (archived) path = id.section('/', 2, 2) == "preview" ? Archives::materialize(original).path : QString();
     const QFileInfo info(path);
     const QSize target = requestedSize.isValid() ? requestedSize.boundedTo(QSize(1024, 1024)) : QSize(256, 256);
     const QUrl fileUrl = QUrl::fromLocalFile(path);
     const QString uri = fileUrl.toString(QUrl::FullyEncoded);
     const QString hash = QString::fromLatin1(QCryptographicHash::hash(uri.toUtf8(), QCryptographicHash::Md5).toHex());
-    const QString mime = QMimeDatabase().mimeTypeForFile(info).name();
+    const QString displayName = archived ? Archives::title(original) : info.fileName();
+    const QString mime = archived ? QMimeDatabase().mimeTypeForFile(displayName, QMimeDatabase::MatchExtension).name()
+        : QMimeDatabase().mimeTypeForFile(info).name();
     QImage result;
     if (info.isFile()) {
         const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/thumbnails/";
@@ -129,8 +136,8 @@ QImage ThumbnailProvider::requestImage(const QString &id, QSize *size, const QSi
         QPainter painter(&result);
         painter.setPen(QColor("#e6edf3"));
         QFont font; font.setPixelSize(qMax(10, target.width() / 18)); painter.setFont(font);
-        QString text = info.isDir() ? "DIRECTORY" : mime + "\n\n" + info.fileName();
-        if (mime.startsWith("text/") || mime == "application/json" || mime.endsWith("+xml")) {
+        QString text = info.isDir() ? "DIRECTORY" : mime + "\n\n" + displayName;
+        if (!path.isEmpty() && (mime.startsWith("text/") || mime == "application/json" || mime.endsWith("+xml"))) {
             QFile file(path);
             if (file.open(QIODevice::ReadOnly)) text = QString::fromUtf8(file.read(4096));
         }

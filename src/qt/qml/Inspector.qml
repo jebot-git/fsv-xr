@@ -38,8 +38,8 @@ Rectangle {
             Label { palette: Theme.controlPalette(Theme.paletteRevision);
                 text: files.selected < 0 ? "Explore the directory in three dimensions." :
                     (files.selection.mime + "\n" + (files.inTrash && files.selection.directory ? "Folder" : Number(files.selection.bytes).toLocaleString() + " bytes") + "\n" +
-                     "Modified: " + files.selection.modified + "\nOwner: " + files.selection.owner +
-                     (files.selection.symlink ? "\nSymbolic link" : ""))
+                     "Modified: " + (files.selection.modified || "Unknown") + (files.inArchive ? "" : "\nOwner: " + files.selection.owner) +
+                     (files.selection.symlink ? (files.inArchive ? "\nLink or special file (opening disabled)" : "\nSymbolic link") : ""))
                 Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.text
             }
             Label { palette: Theme.controlPalette(Theme.paletteRevision);
@@ -47,7 +47,7 @@ Rectangle {
                 Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.muted; font.pixelSize: 11
             }
             RowLayout {
-                Button { palette: Theme.controlPalette(Theme.paletteRevision); objectName: "inspectorOpen"; text: files.inTrash ? "Restore" : "Open"; enabled: files.selected >= 0 && !files.busy && (!files.inTrash || files.selection.canRestore); onClicked: files.open(files.selected) }
+                Button { palette: Theme.controlPalette(Theme.paletteRevision); objectName: "inspectorOpen"; text: files.inTrash ? "Restore" : "Open"; enabled: files.selected >= 0 && !!files.selection.canOpen && !files.busy && (!files.inTrash || files.selection.canRestore); onClicked: files.open(files.selected) }
                 Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Actions…"; enabled: files.selected >= 0 && !files.busy; onClicked: panel.requestAction("menu") }
             }
         }

@@ -97,7 +97,7 @@ void FileSystem::arrangeTree()
     const float factor = qMin(2.5, qMin(160. / bounds.width(), 200. / bounds.height()));
     auto transform = [&](QVector3D point) { return QVector3D(point.x() - bounds.center().x(), point.y(), point.z() - bounds.center().y()) * factor; };
     for (auto &entry : m_entries) { entry.center = transform(entry.center); entry.extent *= factor; }
-    m_treeRoot = {{"path", m_root}, {"name", inTrash() ? tr("Trash") : m_root == "/" ? QString("/") : QFileInfo(m_root).fileName()},
+    m_treeRoot = {{"path", m_root}, {"name", inArchive() ? Archives::title(m_root) : inTrash() ? tr("Trash") : m_root == "/" ? QString("/") : QFileInfo(m_root).fileName()},
         {"center", QVariant::fromValue(transform(rootCenter))}, {"extent", QVariant::fromValue(rootExtent * factor)}};
     for (const auto &segment : segments) {
         const auto from = transform(segment.from), to = transform(segment.to);

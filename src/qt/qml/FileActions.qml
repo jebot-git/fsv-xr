@@ -7,12 +7,12 @@ Item {
     id: actions
     property string editAction: ""
     property string removalPath: ""
-    function confirmRemoval() { removalPath = files.selection.path || ""; confirmDelete.open() }
+    function confirmRemoval() { if (files.inArchive) return; removalPath = files.selection.path || ""; confirmDelete.open() }
     function confirmEmptyTrash() { if (files.inTrash) emptyTrashDialog.open() }
     function showProperties() { properties.open() }
     function show(x, y) { menu.x = x; menu.y = y; menu.open() }
     function edit(action) {
-        if (files.inTrash) return
+        if (files.inTrash || (files.inArchive && action !== "openWith")) return
         editAction = action
         field.text = action === "rename" ? files.selection.name : action === "compress" ? files.selection.name + ".zip" : ""
         editDialog.open()
@@ -25,27 +25,29 @@ Item {
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onTriggered: actions.confirmEmptyTrash() }
         objectName: "contextMenu"
         popupType: Popup.Item
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.open(files.selected) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open in New Tab"; visible: !files.inTrash; enabled: files.selected >= 0 && files.selection.directory; onTriggered: files.newTab(files.selection.path) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Extract Archive"; visible: !files.inTrash && !!files.selection.archive; enabled: !files.busy; onTriggered: files.extractArchive() }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Compress…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.busy; onTriggered: actions.edit("compress") }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open With…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.selection.directory; onTriggered: actions.edit("openWith") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open"; visible: !files.inTrash; enabled: files.selected >= 0 && !!files.selection.canOpen && !files.busy; onTriggered: files.open(files.selected) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open in New Tab"; visible: !files.inTrash; enabled: files.selected >= 0 && (files.selection.directory || files.selection.archive); onTriggered: files.newTab(files.selection.path) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Browse Archive"; visible: !files.inTrash && !files.inArchive && !!files.selection.archive; enabled: !files.busy; onTriggered: files.browseArchive() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Extract Archive"; visible: !files.inTrash && !files.inArchive && !!files.selection.archive; enabled: !files.busy; onTriggered: files.extractArchive() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Compress…"; visible: !files.inTrash && !files.inArchive; enabled: files.selected >= 0 && !files.busy; onTriggered: actions.edit("compress") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open With…"; visible: !files.inTrash; enabled: files.selected >= 0 && !files.selection.directory && !!files.selection.canOpen && !files.busy; onTriggered: actions.edit("openWith") }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Cut"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.clipboard(true) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.clipboard(false) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Paste"; visible: !files.inTrash; enabled: files.canPaste(); onTriggered: files.paste() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Cut"; visible: !files.inTrash && !files.inArchive; enabled: files.selected >= 0; onTriggered: files.clipboard(true) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy"; visible: !files.inTrash && !files.inArchive; enabled: files.selected >= 0; onTriggered: files.clipboard(false) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Paste"; visible: !files.inTrash && !files.inArchive; enabled: files.canPaste(); onTriggered: files.paste() }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Copy Location"; enabled: files.selected >= 0; onTriggered: files.copyLocation() }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Rename…"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: actions.edit("rename") }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Move to Trash"; visible: !files.inTrash; enabled: files.selected >= 0; onTriggered: files.remove(false) }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Delete Permanently…"; enabled: files.selected >= 0; onTriggered: actions.confirmRemoval() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Rename…"; visible: !files.inTrash && !files.inArchive; enabled: files.selected >= 0; onTriggered: actions.edit("rename") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Move to Trash"; visible: !files.inTrash && !files.inArchive; enabled: files.selected >= 0; onTriggered: files.remove(false) }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Delete Permanently…"; visible: !files.inArchive; enabled: files.selected >= 0; onTriggered: actions.confirmRemoval() }
         MenuSeparator {}
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Create Folder…"; visible: !files.inTrash; onTriggered: actions.edit("mkdir") }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open Terminal Here"; visible: !files.inTrash; onTriggered: files.terminal() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Create Folder…"; visible: !files.inTrash && !files.inArchive; onTriggered: actions.edit("mkdir") }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open Terminal Here"; visible: !files.inTrash && !files.inArchive; onTriggered: files.terminal() }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Properties"; enabled: files.selected >= 0; onTriggered: properties.open() }
     }
     Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
         id: editDialog
+        objectName: "editDialog"
         popupType: Popup.Item
         anchors.centerIn: parent
         width: Math.min(420, parent.width - 30)

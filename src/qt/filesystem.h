@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #pragma once
+#include "archives.h"
 #include <QAbstractListModel>
 #include <QFutureWatcher>
 #include <QFileSystemWatcher>
@@ -21,7 +22,12 @@ struct Entry {
     int parent = -1, depth = 0;
     QVector3D center, extent;
 };
-struct ScanResult { QList<Entry> entries; QString warning; };
+struct ScanResult {
+    QList<Entry> entries;
+    QString warning;
+    // Archive member URLs resolve to their parent view and reveal the member.
+    QString rootRedirect, revealPath;
+};
 
 class FileIndex {
 public:
@@ -34,6 +40,7 @@ class FileSystem : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString root READ root NOTIFY rootChanged)
     Q_PROPERTY(bool inTrash READ inTrash NOTIFY rootChanged)
+    Q_PROPERTY(bool inArchive READ inArchive NOTIFY rootChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString warning READ warning NOTIFY warningChanged)
     Q_PROPERTY(int selected READ selected WRITE setSelected NOTIFY selectedChanged)
@@ -56,6 +63,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
     QString root() const { return m_root; }
     bool inTrash() const { return m_root == "trash:/"; }
+    bool inArchive() const { return Archives::isLocation(m_root); }
     bool busy() const { return m_scanning || m_operating; }
     bool operating() const { return m_operating; }
     bool cached() const { return m_cached; }
@@ -82,6 +90,7 @@ public:
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void up();
     Q_INVOKABLE void open(int index);
+    Q_INVOKABLE void browseArchive();
     Q_INVOKABLE void openWith(const QString &program);
     Q_INVOKABLE void clipboard(bool cut);
     Q_INVOKABLE bool canPaste() const;
@@ -129,12 +138,16 @@ private:
     QString selectedPath() const;
     QString targetDirectory() const;
     void operation(const std::function<QString()> &work);
+    void openArchiveMember(const QString &path, const QString &program = {});
     bool validName(const QString &name);
     QString m_root, m_warning, m_layout = "map";
     int m_selected = -1;
     QList<Entry> m_entries;
     QFutureWatcher<ScanResult> m_scan;
     QFutureWatcher<QString> m_operation;
+    QFutureWatcher<Archives::Materialized> m_archiveOpen;
+    std::shared_ptr<std::atomic_bool> m_openCancel;
+    QString m_openProgram;
     QFileSystemWatcher m_watcher;
     QFileSystemWatcher m_placesWatcher;
     QVariantList m_places;

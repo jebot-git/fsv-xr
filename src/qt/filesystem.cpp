@@ -26,6 +26,20 @@
 #include <limits>
 #include <cmath>
 
+namespace {
+QString navigationTarget(const QString &path) {
+    if (Archives::isLocation(path)) return path;
+    const QFileInfo info(QUrl(path).isLocalFile() ? QUrl(path).toLocalFile() : path);
+    if (info.isFile() && Archives::supported(info.filePath())) return Archives::location(info.absoluteFilePath());
+    return path == "trash:/" ? path : info.absoluteFilePath();
+}
+bool readableLocation(const QString &path) {
+    if (path == "trash:/") return true;
+    if (Archives::isLocation(path)) return Archives::validLocation(path);
+    const QFileInfo info(path); return info.isDir() && info.isReadable();
+}
+}
+
 FileSystem::FileSystem(QObject *parent) : QAbstractListModel(parent)
 {
     m_tabs.append(Tab{});
@@ -43,7 +57,14 @@ FileSystem::FileSystem(QObject *parent) : QAbstractListModel(parent)
         m_inFlight = false;
         if (m_scanGeneration == m_generation && !*m_cancel) {
             m_scanning = false;
-            applyResult(m_scan.result(), false, true);
+            const auto result = m_scan.result();
+            if (!result.rootRedirect.isEmpty()) {
+                m_root = result.rootRedirect;
+                m_tabs[m_currentTab].root = m_root;
+                m_tabs[m_currentTab].reveal = result.revealPath;
+                emit rootChanged(); emit tabsChanged();
+            }
+            applyResult(result, false, true);
             saveTab();
             auto &tab = m_tabs[m_currentTab];
             if (!tab.reveal.isEmpty()) {
@@ -64,10 +85,20 @@ FileSystem::FileSystem(QObject *parent) : QAbstractListModel(parent)
         refresh();
         emit busyChanged();
     });
+    connect(&m_archiveOpen, &QFutureWatcher<Archives::Materialized>::finished, this, [this] {
+        const auto result = m_archiveOpen.result();
+        m_operating = false;
+        emit busyChanged();
+        if (!result.error.isEmpty()) emit error(result.error);
+        else if (!m_openProgram.isEmpty()) {
+            if (!QProcess::startDetached(m_openProgram, {result.path})) emit error("Could not start " + m_openProgram);
+        } else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(result.path))) emit error("No application could open the archive file.");
+    });
     auto debounce = new QTimer(this);
     debounce->setSingleShot(true);
     debounce->setInterval(400);
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, debounce, [debounce] { debounce->start(); });
+    connect(&m_watcher, &QFileSystemWatcher::fileChanged, debounce, [debounce] { debounce->start(); });
     connect(debounce, &QTimer::timeout, this, [this, debounce] {
         if (busy()) debounce->start(); else refresh();
     });
@@ -77,6 +108,8 @@ FileSystem::~FileSystem()
     if (m_cancel) *m_cancel = true;
     m_scan.waitForFinished();
     m_operation.waitForFinished();
+    if (m_openCancel) *m_openCancel = true;
+    m_archiveOpen.waitForFinished();
 }
 int FileSystem::rowCount(const QModelIndex &parent) const { return parent.isValid() ? 0 : m_entries.size(); }
 QHash<int, QByteArray> FileSystem::roleNames() const
@@ -104,7 +137,7 @@ QVariant FileSystem::data(const QModelIndex &index, int role) const
         if (e.mime.startsWith("video/")) return QColor("#b580cd");
         if (e.mime.startsWith("audio/")) return QColor("#dba361");
         return QColor("#739fbe");
-    case Thumbnail: return ThumbnailProvider::url(e.path, e.modifiedMs);
+    case Thumbnail: return ThumbnailProvider::url(e.path, inArchive() ? QFileInfo(Archives::source(m_root)).lastModified().toMSecsSinceEpoch() : e.modifiedMs);
     default: return {};
     }
 }
@@ -338,11 +371,10 @@ void FileSystem::setLayout(const QString &value)
 }
 void FileSystem::navigate(const QString &path)
 {
-    const QFileInfo info(QUrl(path).isLocalFile() ? QUrl(path).toLocalFile() : path);
-    if (path != "trash:/" && (!info.isDir() || !info.isReadable())) { emit error("Cannot read directory: " + path); return; }
+    const QString target = navigationTarget(path);
+    if (!readableLocation(target)) { emit error("Cannot read location: " + path); return; }
     if (m_operating) { emit error("Wait for the current operation to finish."); return; }
     m_tabs[m_currentTab].reveal.clear(); m_tabs[m_currentTab].showProperties = false;
-    const QString target = path == "trash:/" ? path : info.absoluteFilePath();
     if (m_root == target) { refresh(); return; }
     m_root = target;
     m_tabs[m_currentTab].root = m_root;
@@ -354,6 +386,16 @@ void FileSystem::navigate(const QString &path)
 }
 void FileSystem::openLocation(const QString &location, bool selectItem, bool properties, bool inNewTab)
 {
+    if (Archives::isLocation(location)) {
+        const bool reveal = (selectItem || properties) && !Archives::member(location).isEmpty();
+        const QString target = reveal ? Archives::parent(location) : location;
+        if (inNewTab) newTab(target); else navigate(target);
+        if (reveal && m_root == target) {
+            m_tabs[m_currentTab].reveal = location;
+            m_tabs[m_currentTab].showProperties = properties;
+        }
+        return;
+    }
     if (location == "trash:/" || location == "trash:///") {
         if (inNewTab) newTab("trash:/"); else navigate("trash:/");
         return;
@@ -362,6 +404,10 @@ void FileSystem::openLocation(const QString &location, bool selectItem, bool pro
     if (!url.scheme().isEmpty() && !url.isLocalFile()) { emit error("Only local file URLs and trash:/ are supported: " + location); return; }
     const QFileInfo info(url.isLocalFile() ? url.toLocalFile() : location);
     if (!info.exists() && !info.isSymLink()) { emit error("Location does not exist: " + location); return; }
+    if (!selectItem && !properties && info.isFile() && Archives::supported(info.filePath())) {
+        if (inNewTab) newTab(Archives::location(info.absoluteFilePath())); else navigate(Archives::location(info.absoluteFilePath()));
+        return;
+    }
     const bool reveal = selectItem || properties || !info.isDir();
     const QString directory = reveal ? info.absolutePath() : info.absoluteFilePath();
     if (inNewTab) newTab(directory); else navigate(directory);
@@ -403,6 +449,7 @@ void FileSystem::launchScan()
                 if (indexed) emit indexRestored();
             }, Qt::QueuedConnection);
         };
+        if (Archives::isLocation(root)) return Archives::browse(root, cancel, !useIndex);
         if (root == "trash:/") return TrashStore::scan(TrashStore::locations(), cancel);
         bool restored = haveScene;
         if (useIndex && !haveScene && !*cancel) {
@@ -439,10 +486,13 @@ void FileSystem::applyResult(const ScanResult &result, bool cached, bool watchCh
     m_cached = cached;
     if (watchChildren || !m_watcher.directories().contains(m_root)) {
         if (!m_watcher.directories().isEmpty()) m_watcher.removePaths(m_watcher.directories());
+        if (!m_watcher.files().isEmpty()) m_watcher.removePaths(m_watcher.files());
         QStringList paths;
         if (inTrash()) paths = TrashStore::watchPaths();
-        else if (!m_root.isEmpty()) paths << m_root;
-        if (watchChildren && !inTrash()) for (const auto &e : m_entries)
+        else if (inArchive()) {
+            paths << Archives::source(m_root) << QFileInfo(Archives::source(m_root)).absolutePath();
+        } else if (!m_root.isEmpty()) paths << m_root;
+        if (watchChildren && !inTrash() && !inArchive()) for (const auto &e : m_entries)
             if (e.directory && !e.symlink && paths.size() < 256) paths << e.path;
         if (!paths.isEmpty()) m_watcher.addPaths(paths);
     }
@@ -453,7 +503,7 @@ QVariantList FileSystem::tabs() const
 {
     QVariantList result;
     for (const auto &tab : m_tabs) result.append(QVariantMap{{"path", tab.root},
-        {"title", tab.root.isEmpty() ? tr("New Tab") : tab.root == "trash:/" ? tr("Trash") : tab.root == "/" ? QString("/") : QFileInfo(tab.root).fileName()}});
+        {"title", tab.root.isEmpty() ? tr("New Tab") : tab.root == "trash:/" ? tr("Trash") : Archives::isLocation(tab.root) ? Archives::title(tab.root) : tab.root == "/" ? QString("/") : QFileInfo(tab.root).fileName()}});
     return result;
 }
 QVariantMap FileSystem::viewState() const { return m_tabs[m_currentTab].view; }
@@ -467,16 +517,15 @@ void FileSystem::saveTab()
     if (m_currentTab < 0 || m_currentTab >= m_tabs.size()) return;
     auto &tab = m_tabs[m_currentTab];
     tab.root = m_root; tab.layout = m_layout; tab.selectedPath = selectedPath();
-    tab.snapshot = {m_entries, m_warning}; tab.loaded = !m_root.isEmpty();
+    tab.snapshot = {m_entries, m_warning, {}, {}}; tab.loaded = !m_root.isEmpty();
 }
 void FileSystem::newTab(const QString &path)
 {
     if (m_operating) { emit error("Wait for the current operation to finish."); return; }
     if (m_tabs.size() >= 32) { emit error("Up to 32 tabs can be open at once."); return; }
-    const QString target = path.isEmpty() ? (m_root.isEmpty() ? QDir::homePath() : m_root) : path;
-    const QFileInfo info(QUrl(target).isLocalFile() ? QUrl(target).toLocalFile() : target);
-    if (target != "trash:/" && (!info.isDir() || !info.isReadable())) { emit error("Cannot read directory: " + target); return; }
-    Tab tab; tab.root = target == "trash:/" ? target : info.absoluteFilePath();
+    const QString target = navigationTarget(path.isEmpty() ? (m_root.isEmpty() ? QDir::homePath() : m_root) : path);
+    if (!readableLocation(target)) { emit error("Cannot read location: " + target); return; }
+    Tab tab; tab.root = target;
     m_tabs.append(tab);
     activateTab(m_tabs.size() - 1);
 }
@@ -509,7 +558,7 @@ void FileSystem::closeTab(int index)
         emit tabsChanged(); emit currentTabChanged();
     }
 }
-void FileSystem::up() { navigate(inTrash() ? QDir::homePath() : QFileInfo(m_root).dir().absolutePath()); }
+void FileSystem::up() { navigate(inArchive() ? Archives::parent(m_root) : inTrash() ? QDir::homePath() : QFileInfo(m_root).dir().absolutePath()); }
 void FileSystem::setSelected(int index)
 {
     if (index < -1 || index >= m_entries.size() || m_selected == index) return;
@@ -523,9 +572,9 @@ QVariantMap FileSystem::selection() const
     return {{"trashed", !e.trashDirectory.isEmpty()}, {"originalPath", e.originalPath},
             {"deleted", e.deletionDate}, {"canRestore", !e.originalPath.isEmpty()},
             {"path", e.path}, {"name", e.name}, {"mime", e.mime}, {"bytes", e.bytes},
-            {"archive", !e.directory && Archives::supported(e.path)}, {"directory", e.directory}, {"symlink", e.symlink}, {"modified", info.lastModified().toString(Qt::ISODate)},
-            {"owner", info.owner()}, {"permissions", QString::number(uint(info.permissions()), 16)},
-            {"thumbnail", ThumbnailProvider::url(e.path)}, {"center", QVariant::fromValue(e.center)},
+            {"archive", !inArchive() && !e.directory && Archives::supported(e.path)}, {"canOpen", !inArchive() || !e.symlink}, {"directory", e.directory}, {"symlink", e.symlink}, {"modified", inArchive() ? (e.modifiedMs ? QDateTime::fromMSecsSinceEpoch(e.modifiedMs).toString(Qt::ISODate) : QString()) : info.lastModified().toString(Qt::ISODate)},
+            {"owner", inArchive() ? QString() : info.owner()}, {"permissions", inArchive() ? QString() : QString::number(uint(info.permissions()), 16)},
+            {"thumbnail", ThumbnailProvider::url(e.path, inArchive() ? QFileInfo(Archives::source(m_root)).lastModified().toMSecsSinceEpoch() : e.modifiedMs, inArchive())}, {"center", QVariant::fromValue(e.center)},
             {"extent", QVariant::fromValue(e.extent)}};
 }
 void FileSystem::open(int index)
@@ -533,12 +582,32 @@ void FileSystem::open(int index)
     if (index < 0 || index >= m_entries.size()) return;
     const auto e = m_entries[index];
     if (inTrash()) { setSelected(index); restore(); return; }
-    if (e.directory) navigate(e.path);
+    if (inArchive()) {
+        if (e.symlink) { emit error("Links and special files cannot be opened from an archive."); return; }
+        if (e.directory) navigate(e.path); else openArchiveMember(e.path);
+    } else if (e.directory) navigate(e.path);
+    else if (Archives::supported(e.path)) navigate(Archives::location(e.path));
     else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(e.path))) emit error("No application could open " + e.name);
+}
+void FileSystem::browseArchive()
+{
+    if (inTrash() || inArchive() || selectedPath().isEmpty() || !selection().value("archive").toBool()) return;
+    navigate(Archives::location(selectedPath()));
+}
+void FileSystem::openArchiveMember(const QString &path, const QString &program)
+{
+    if (busy()) { emit error("Wait for the current operation to finish."); return; }
+    m_openProgram = program;
+    m_openCancel = std::make_shared<std::atomic_bool>(false);
+    const auto cancel = m_openCancel;
+    m_operating = true;
+    m_archiveOpen.setFuture(QtConcurrent::run([path, cancel] { return Archives::materialize(path, cancel); }));
+    emit busyChanged();
 }
 void FileSystem::openWith(const QString &program)
 {
     if (inTrash() || selectedPath().isEmpty()) return;
+    if (inArchive()) { openArchiveMember(selectedPath(), program); return; }
     if (!QProcess::startDetached(program, {selectedPath()})) emit error("Could not start " + program);
 }
 QString FileSystem::targetDirectory() const
@@ -548,14 +617,14 @@ QString FileSystem::targetDirectory() const
 }
 void FileSystem::clipboard(bool cut)
 {
-    if (inTrash() || selectedPath().isEmpty()) return;
+    if (inArchive() || inTrash() || selectedPath().isEmpty()) return;
     auto *mime = new QMimeData;
     mime->setUrls({QUrl::fromLocalFile(selectedPath())});
     mime->setData("application/x-kde-cutselection", cut ? "1" : "0");
     mime->setData("x-special/gnome-copied-files", (cut ? QByteArray("cut\n") : QByteArray("copy\n")) + QUrl::fromLocalFile(selectedPath()).toEncoded());
     QGuiApplication::clipboard()->setMimeData(mime);
 }
-bool FileSystem::canPaste() const { return !inTrash() && QGuiApplication::clipboard()->mimeData()->hasUrls(); }
+bool FileSystem::canPaste() const { return !inArchive() && !inTrash() && QGuiApplication::clipboard()->mimeData()->hasUrls(); }
 
 QString FileSystem::copyEntry(const QString &source, const QString &destination)
 {
@@ -588,20 +657,20 @@ void FileSystem::operation(const std::function<QString()> &work)
 }
 void FileSystem::extractArchive()
 {
-    if (inTrash() || selectedPath().isEmpty()) return;
+    if (inArchive() || inTrash() || selectedPath().isEmpty()) return;
     const QString path = selectedPath();
     operation([path] { return Archives::extract(path); });
 }
 void FileSystem::compress(const QString &name)
 {
-    if (inTrash() || selectedPath().isEmpty() || !validName(name)) return;
+    if (inArchive() || inTrash() || selectedPath().isEmpty() || !validName(name)) return;
     const QString source = selectedPath();
     const QString destination = QFileInfo(source).dir().filePath(name);
     operation([source, destination] { return Archives::create(source, destination); });
 }
 void FileSystem::paste()
 {
-    if (inTrash()) return;
+    if (inArchive() || inTrash()) return;
     const auto *mime = QGuiApplication::clipboard()->mimeData();
     const auto urls = mime->urls();
     const bool cut = mime->data("application/x-kde-cutselection") == "1" || mime->data("x-special/gnome-copied-files").startsWith("cut\n");
@@ -610,11 +679,12 @@ void FileSystem::paste()
 }
 QString FileSystem::dropDirectory(int index) const
 {
+    if (inArchive()) return {};
     return index >= 0 && index < m_entries.size() && m_entries[index].directory ? m_entries[index].path : m_root;
 }
 void FileSystem::startDrag()
 {
-    if (busy() || inTrash() || selectedPath().isEmpty()) return;
+    if (busy() || inArchive() || inTrash() || selectedPath().isEmpty()) return;
     auto *window = QGuiApplication::focusWindow();
     if (!window) return;
     auto *drag = new QDrag(window);
@@ -629,7 +699,7 @@ void FileSystem::startDrag()
 }
 bool FileSystem::canDrop(const QList<QUrl> &urls, const QString &directory) const
 {
-    if (busy() || inTrash() || urls.isEmpty()) return false;
+    if (busy() || inArchive() || inTrash() || Archives::isLocation(directory) || urls.isEmpty()) return false;
     const QFileInfo target(directory);
     const QString parent = target.canonicalFilePath();
     if (!target.isDir() || !target.isWritable() || parent.isEmpty()) return false;
@@ -656,7 +726,7 @@ bool FileSystem::dropFiles(const QList<QUrl> &urls, const QString &directory, in
 }
 QString FileSystem::transferFiles(const QList<QUrl> &urls, const QString &directory, bool move)
 {
-    if (!QFileInfo(directory).isDir()) return "Destination is not a directory: " + directory;
+    if (Archives::isLocation(directory) || !QFileInfo(directory).isDir()) return "Destination is not a directory: " + directory;
     // Validate the entire batch before changing any files.
     QSet<QString> destinations;
     for (const auto &url : urls) {
@@ -692,7 +762,7 @@ bool FileSystem::validName(const QString &name)
 }
 void FileSystem::rename(const QString &name)
 {
-    if (inTrash()) return;
+    if (inArchive() || inTrash()) return;
     const QString source = selectedPath();
     if (source.isEmpty() || !validName(name)) return;
     const QString destination = QFileInfo(source).dir().filePath(name);
@@ -704,13 +774,14 @@ void FileSystem::rename(const QString &name)
 }
 void FileSystem::newFolder(const QString &name)
 {
-    if (inTrash()) return;
+    if (inArchive() || inTrash()) return;
     if (!validName(name)) return;
     const QString directory = targetDirectory();
     operation([directory, name] { return QDir(directory).mkdir(name) ? QString() : "Cannot create folder: " + name; });
 }
 void FileSystem::remove(bool permanently)
 {
+    if (inArchive()) return;
     const QString path = selectedPath(); if (path.isEmpty()) return;
     if (inTrash()) {
         if (permanently) { const auto entry = m_entries[m_selected]; operation([entry] { return TrashStore::erase(entry); }); }
@@ -739,6 +810,6 @@ void FileSystem::emptyTrash()
 void FileSystem::copyLocation() { if (!selectedPath().isEmpty()) QGuiApplication::clipboard()->setText(selectedPath()); }
 void FileSystem::terminal()
 {
-    if (inTrash()) return;
+    if (inArchive() || inTrash()) return;
     if (!QProcess::startDetached("konsole", {"--workdir", targetDirectory()})) emit error("Could not start Konsole.");
 }

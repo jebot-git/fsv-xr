@@ -61,6 +61,32 @@ private slots:
             if (files.data(files.index(i), FileSystem::Name).toString() == "packed.zip") files.setSelected(i);
         QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
         QTRY_VERIFY(extract->property("visible").toBool()); QVERIFY(extract->property("enabled").toBool());
+        QObject *browse = nullptr;
+        for (auto *item : menu->findChildren<QQuickItem *>())
+            if (item->metaObject()->indexOfSignal("triggered()") >= 0 && item->property("text").toString() == "Browse Archive") browse = item;
+        QVERIFY(browse); QVERIFY(browse->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+        QVERIFY(QMetaObject::invokeMethod(browse, "triggered"));
+        QTRY_VERIFY(!files.busy()); QVERIFY(files.inArchive()); QCOMPARE(files.rowCount(), 1);
+        files.setSelected(0); QCOMPARE(files.selection().value("name").toString(), QString("sample.txt"));
+        QVERIFY(files.warning().startsWith("Read-only archive."));
+        QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
+        QTRY_VERIFY(menu->property("visible").toBool());
+        const QStringList forbidden{"Compress…", "Extract Archive", "Browse Archive", "Cut", "Copy", "Paste", "Rename…", "Move to Trash", "Delete Permanently…", "Create Folder…", "Open Terminal Here"};
+        for (auto *item : menu->findChildren<QQuickItem *>())
+            if (item->metaObject()->indexOfSignal("triggered()") >= 0 && forbidden.contains(item->property("text").toString())) QVERIFY(!item->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+        QVERIFY(QMetaObject::invokeMethod(actions, "edit", Q_ARG(QVariant, "rename")));
+        auto *editDialog = window->findChild<QObject *>("editDialog"); QVERIFY(editDialog);
+        QTRY_VERIFY(!editDialog->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(actions, "confirmRemoval"));
+        auto *confirm = window->findChild<QObject *>("confirmDeleteDialog"); QVERIFY(confirm); QVERIFY(!confirm->property("visible").toBool());
+        QTest::qWait(200); QVERIFY(window->grabWindow().save("fsvr-archive-preview.png"));
+        files.up(); QTRY_VERIFY(!files.busy()); QVERIFY(!files.inArchive());
+        for (int i = 0; i < files.rowCount(); ++i)
+            if (files.data(files.index(i), FileSystem::Name).toString() == "packed.zip") files.setSelected(i);
+        QVERIFY(QMetaObject::invokeMethod(actions, "show", Q_ARG(QVariant, 230), Q_ARG(QVariant, 130)));
+        QTRY_VERIFY(extract->property("visible").toBool());
         QVERIFY(QMetaObject::invokeMethod(menu, "close"));
         QVERIFY(QMetaObject::invokeMethod(extract, "triggered"));
         QTRY_VERIFY(!files.busy()); QVERIFY(QFileInfo::exists(temp.filePath("packed/sample.txt")));
