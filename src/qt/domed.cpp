@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "domed.h"
-#include <QKeyEvent>
 #include "filesystem.h"
 #include "thumbnail.h"
 #include "appearance.h"
@@ -10,33 +9,10 @@
 #include <QResizeEvent>
 #include <QQuickWindow>
 #include <QQuickItem>
-#include <QDialog>
 #include <QApplication>
-#include <QDialogButtonBox>
-#include <QLabel>
-#include <QPushButton>
-#include <QVBoxLayout>
-#include <QFutureWatcher>
-#include <QtConcurrent/QtConcurrentRun>
-#include <QThreadPool>
 #include <QMenu>
 
-namespace {
-class PreviewPanel : public QDialog {
-public:
-    explicit PreviewPanel(QWidget *parent, bool grabbing)
-        : QDialog(parent, (grabbing ? Qt::Popup : Qt::ToolTip) | Qt::FramelessWindowHint) {}
-protected:
-    void paintEvent(QPaintEvent *) override {
-        // WA_TranslucentBackground disables QWidget's automatic background fill.
-        QPainter painter(this);
-        painter.setCompositionMode(QPainter::CompositionMode_Source);
-        painter.fillRect(rect(), palette().window());
-    }
-};
-}
-
-DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) : m_files(files), m_appearance(appearance)
+DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) : m_files(files)
 {
     setWindowTitle("fsvr — DomeD");
     connect(files, &FileSystem::rootChanged, this, [this, files] { setWindowTitle("fsvr — " + files->root()); });
@@ -59,19 +35,28 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) 
     m_scene.setSource(QUrl("qrc:/qml/Browser.qml"));
     if (m_scene.rootObject()) {
         m_scene.rootObject()->setProperty("spatialPopups", spatial);
-        connect(m_scene.rootObject(), SIGNAL(previewRequested(QPointF)), this, SLOT(showPreview(QPointF)));
         connect(m_scene.rootObject(), SIGNAL(contextMenuRequested(QPointF)), this, SLOT(showContextMenu(QPointF)));
     }
     connect(files, &FileSystem::selectedChanged, this, [this] {
-        // A reset, refresh, or another selection invalidates the popup's actions.
-        if (m_preview) m_preview->close();
+        // A reset, refresh, or another selection invalidates menu actions.
         if (m_menu) m_menu->close();
     });
+    // QQuickWidget renders on the GUI thread. Track actual scene renders so
+    // asynchronous thumbnails, animations and theme changes all invalidate the
+    // raster copy without reading back an unchanged framebuffer while idle.
+    connect(m_scene.quickWindow(), &QQuickWindow::afterRendering, this, [this] {
+        if (!m_capturing) m_frameDirty = true;
+    }, Qt::DirectConnection);
     m_scene.show();
     // grabFramebuffer renders hidden QQuickWidgets with Qt's offscreen Vulkan RHI.
     connect(&m_timer, &QTimer::timeout, this, [this] {
-        if (!isVisible() || isMinimized()) return;
+        if (!m_frameDirty || !isVisible() || isMinimized()) return;
+        m_frameDirty = false;
+        // grabFramebuffer itself renders; that render must not schedule another
+        // capture indefinitely. Subsequent scene updates mark the frame dirty.
+        m_capturing = true;
         m_frame = m_scene.grabFramebuffer();
+        m_capturing = false;
         if (m_frame.isNull()) { qCritical("DomeD offscreen Vulkan rendering failed."); QCoreApplication::exit(1); return; }
         update();
     });
@@ -80,86 +65,9 @@ DomeWindow::DomeWindow(FileSystem *files, Appearance *appearance, bool spatial) 
 DomeWindow::~DomeWindow()
 {
     m_timer.stop();
-    // Preview jobs own no widgets, but must finish before QApplication and its
-    // font/image infrastructure are destroyed during process shutdown.
-    QThreadPool::globalInstance()->waitForDone();
-}
-void DomeWindow::showPreview(const QPointF &anchor)
-{
-    const auto selection = m_files->selection();
-    if (selection.isEmpty() || m_files->busy()) return;
-    if (m_preview) delete m_preview.data();
-    // Qt::Popup creates a real xdg_popup with an attachment point on the owning
-    // raster Wayland surface. DomeD supplies placement and mouse/keyboard input.
-    // A FileManager1 request can arrive before this window has an input serial.
-    // Qt's non-grabbing tooltip role still creates an xdg_popup in that case.
-    auto *panel = new PreviewPanel(this, m_haveInput);
-    m_preview = panel;
-    panel->setObjectName("spatialFilePreview");
-    panel->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(panel, &QWidget::customContextMenuRequested, panel, [this, panel](const QPoint &point) { showMenu(panel, point); });
-    panel->setAttribute(Qt::WA_TranslucentBackground);
-    panel->setAutoFillBackground(true);
-    auto updatePalette = [this, panel] {
-        QPalette palette = QApplication::palette();
-        palette.setColor(QPalette::Window, m_appearance->panelColor());
-        panel->setPalette(palette);
-        panel->update();
-    };
-    connect(m_appearance, &Appearance::changed, panel, updatePalette);
-    updatePalette();
-    panel->setWindowTitle("fsvr — " + selection.value("name").toString());
-    panel->setFixedWidth(340);
-    auto *layout = new QVBoxLayout(panel);
-    auto label = [layout](const QString &text) {
-        auto *item = new QLabel(text);
-        item->setTextFormat(Qt::PlainText);
-        item->setWordWrap(true);
-        layout->addWidget(item);
-        return item;
-    };
-    auto *title = label(selection.value("name").toString());
-    title->setMaximumHeight(52);
-    title->setToolTip(selection.value("name").toString());
-    QFont font = title->font(); font.setBold(true); title->setFont(font);
-    auto *image = label("Loading preview…");
-    image->setFixedSize(316, 140);
-    image->setAlignment(Qt::AlignCenter);
-    label(selection.value("mime").toString() + "\n" + (m_files->inTrash() && selection.value("directory").toBool() ? QString("Folder") : QLocale().toString(selection.value("bytes").toLongLong()) + " bytes") + "\nModified: "
-          + selection.value("modified").toString() + "\nOwner: " + selection.value("owner").toString()
-          + (selection.value("symlink").toBool() ? "\nSymbolic link" : ""));
-    if (selection.value("trashed").toBool())
-        label("Original location: " + selection.value("originalPath").toString() + "\nDeleted: " + selection.value("deleted").toString());
-    auto *path = label(selection.value("path").toString());
-    path->setMaximumHeight(60);
-    path->setToolTip(selection.value("path").toString());
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
-    auto *open = buttons->addButton(m_files->inTrash() ? "Restore" : "Open", QDialogButtonBox::AcceptRole);
-    open->setEnabled(!m_files->inTrash() || selection.value("canRestore").toBool());
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, panel, &QDialog::reject);
-    connect(open, &QPushButton::clicked, panel, [this, panel, selection] {
-        panel->close();
-        if (m_files->selection().value("path") == selection.value("path")) m_files->open(m_files->selected());
-    });
-    const QString id = selection.value("thumbnail").toString().mid(QString("image://thumbnail/").size());
-    auto *watcher = new QFutureWatcher<QImage>(panel);
-    connect(watcher, &QFutureWatcher<QImage>::finished, panel, [watcher, image] {
-        image->setText({});
-        image->setPixmap(QPixmap::fromImage(watcher->result()).scaled(image->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        watcher->deleteLater();
-    });
-    watcher->setFuture(QtConcurrent::run([id] {
-        ThumbnailProvider provider;
-        return provider.requestImage(id, nullptr, QSize(512, 512));
-    }));
-    panel->adjustSize();
-    panel->move(mapToGlobal(anchor.toPoint()));
-    panel->show();
 }
 void DomeWindow::showContextMenu(const QPointF &anchor)
 {
-    if (m_preview) m_preview->close();
     showMenu(this, anchor);
 }
 void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
@@ -179,7 +87,6 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     };
     auto edit = [this](const QString &operation) {
         QTimer::singleShot(0, this, [this, operation] {
-            if (m_preview) m_preview->close();
             auto *actions = m_scene.rootObject()->findChild<QObject *>("fileActions");
             if (actions) QMetaObject::invokeMethod(actions, "edit", Q_ARG(QVariant, operation));
         });
@@ -220,7 +127,6 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     }
     if (!m_files->inArchive()) item("Delete Permanently…", selected, [this] {
         QTimer::singleShot(0, this, [this] {
-            if (m_preview) m_preview->close();
             auto *actions = m_scene.rootObject()->findChild<QObject *>("fileActions");
             if (actions) QMetaObject::invokeMethod(actions, "confirmRemoval");
         });
@@ -232,13 +138,19 @@ void DomeWindow::showMenu(QWidget *owner, const QPointF &anchor)
     }
     item("Properties", selected, [this] {
         QTimer::singleShot(0, this, [this] {
-            QMetaObject::invokeMethod(m_scene.rootObject(), "previewSelection");
+            QMetaObject::invokeMethod(m_scene.rootObject(), "showInspector");
         });
     });
     // Export the full menu buffer. Let DomeD crop/scroll it, instead of stacking
     // QMenu's screen-height scrolling inside the compositor's own viewport.
     menu->ensurePolished();
     menu->setFixedSize(menu->sizeHint());
+    // The hidden Quick widget does not receive the native owner's mouse grab
+    // loss when QMenu opens. Cancel its current press so the next click starts
+    // a fresh gesture after the native popup closes.
+    QTimer::singleShot(0, this, [this] {
+        if (auto *grabber = m_scene.quickWindow()->mouseGrabberItem()) grabber->ungrabMouse();
+    });
     menu->popup(owner->mapToGlobal(anchor.toPoint()));
 }
 bool DomeWindow::ready() const { return m_scene.status() == QQuickWidget::Ready; }
@@ -251,10 +163,6 @@ void DomeWindow::paintEvent(QPaintEvent *)
 void DomeWindow::resizeEvent(QResizeEvent *event) { m_scene.resize(event->size()); QWidget::resizeEvent(event); }
 bool DomeWindow::event(QEvent *event)
 {
-    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress) m_haveInput = true;
-    if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape && m_preview && m_preview->isVisible()) {
-        m_preview->close(); event->accept(); return true;
-    }
     switch (event->type()) {
     case QEvent::DragEnter: case QEvent::DragMove: case QEvent::DragLeave: case QEvent::Drop:
     case QEvent::MouseButtonPress: case QEvent::MouseButtonRelease: case QEvent::MouseButtonDblClick:

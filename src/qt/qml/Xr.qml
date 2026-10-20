@@ -37,7 +37,7 @@ XrView {
     onPitchChanged: storeView()
     Component.onCompleted: { restoreView(); viewReady = true }
     Connections { target: files; function onViewStateChanged() { if (view.viewReady) view.restoreView() } }
-    Connections { target: files; function onPropertiesRequested() { preview.reopen() } }
+    Connections { target: files; function onPropertiesRequested() { inspector.reveal() } }
     function changeZoom(delta) {
         const target = Math.max(.1, Math.min(3, zoom * Math.exp(delta)))
         if (target === zoom) return
@@ -58,7 +58,7 @@ XrView {
         const result = hit(hand)
         if (result.objectHit && result.objectHit.entryIndex !== undefined) {
             files.selected = result.objectHit.entryIndex
-            preview.reopen()
+            inspector.reveal()
         }
     }
     function contextRay(hand) {
@@ -77,15 +77,7 @@ XrView {
         yaw: view.yaw; pitch: view.pitch
         position: Qt.vector3d(view.panX, 85 + view.panY, -140 + view.panZ)
         scale: Qt.vector3d(view.zoom, view.zoom, view.zoom)
-    }
-    SpatialPreview {
-        id: preview
-        position: {
-            if (files.selected < 0) return Qt.vector3d(0, 0, 0)
-            const top = world.mapPositionToScene(world.selectionTop(files.selection))
-            return top.plus(Qt.vector3d(-14.4, 44, 8))
-        }
-        onRequestActions: controls.show(8, 40)
+        texturePixelsPerUnit: 16 * view.zoom
     }
     // An always-present control panel, independent of file selection.
     Node {
@@ -117,7 +109,7 @@ XrView {
                     ComboBox { palette: Theme.controlPalette(Theme.paletteRevision); model: ["map", "tree", "disc"]; currentIndex: ["map", "tree", "disc"].indexOf(files.layout); onActivated: files.layout = currentText }
                 }
                 Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: controls.confirmEmptyTrash() }
-                Inspector { Layout.fillWidth: true; Layout.fillHeight: true; onRequestAction: controls.show(8, 40) }
+                Inspector { id: inspector; Layout.fillWidth: true; Layout.fillHeight: true; onRequestAction: controls.show(8, 40) }
                 RowLayout {
                     Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "− Zoom"; onClicked: view.changeZoom(-Math.log(1.2)) }
                     Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "+ Zoom"; onClicked: view.changeZoom(Math.log(1.2)) }
@@ -126,7 +118,7 @@ XrView {
                 Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "Index pinch: select / click\nMiddle pinch + move: drag view\nTwo middle pinches: scale\nRing pinch: actions"; color: Theme.muted }
                 Label { palette: Theme.controlPalette(Theme.paletteRevision); text: files.warning; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: Theme.text; font.pixelSize: 10 }
             }
-            FileActions { id: controls; anchors.fill: parent }
+            FileActions { id: controls; anchors.fill: parent; onInspectorRequested: inspector.reveal() }
         }
     }
     Timer {

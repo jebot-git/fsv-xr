@@ -9,7 +9,8 @@ Item {
     property string removalPath: ""
     function confirmRemoval() { if (files.inArchive) return; removalPath = files.selection.path || ""; confirmDelete.open() }
     function confirmEmptyTrash() { if (files.inTrash) emptyTrashDialog.open() }
-    function showProperties() { properties.open() }
+    signal inspectorRequested()
+    function showProperties() { inspectorRequested() }
     function show(x, y) { menu.x = x; menu.y = y; menu.open() }
     function edit(action) {
         if (files.inTrash || (files.inArchive && action !== "openWith")) return
@@ -43,7 +44,7 @@ Item {
         MenuSeparator {}
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Create Folder…"; visible: !files.inTrash && !files.inArchive; onTriggered: actions.edit("mkdir") }
         MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Open Terminal Here"; visible: !files.inTrash && !files.inArchive; onTriggered: files.terminal() }
-        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Properties"; enabled: files.selected >= 0; onTriggered: properties.open() }
+        MenuItem { palette: Theme.controlPalette(Theme.paletteRevision); text: "Properties"; enabled: files.selected >= 0; onTriggered: actions.showProperties() }
     }
     Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
         id: editDialog
@@ -89,14 +90,6 @@ Item {
         standardButtons: Dialog.Yes | Dialog.No
         Label { palette: Theme.controlPalette(Theme.paletteRevision); width: parent.width; text: "Permanently delete all items in Trash on all currently available volumes? This cannot be undone."; wrapMode: Text.WordWrap }
         onAccepted: { if (files.inTrash) files.emptyTrash() }
-    }
-    Popup { palette: Theme.controlPalette(Theme.paletteRevision);
-        id: properties
-        popupType: Popup.Item
-        anchors.centerIn: parent
-        padding: 0
-        width: Math.min(360, parent.width - 20); height: Math.min(570, parent.height - 20)
-        Inspector { anchors.fill: parent; onRequestAction: properties.close() }
     }
     Dialog { palette: Theme.controlPalette(Theme.paletteRevision);
         id: errorDialog

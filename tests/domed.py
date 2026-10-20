@@ -72,6 +72,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
     bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     env["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.readline().strip()
     heartbeat_stop = threading.Event()
+    heartbeat_paused = threading.Event()
     dome = client = None
     def state():
         with urllib.request.urlopen(base + "/api/state", timeout=2) as response:
@@ -131,16 +132,23 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         before = wait(frame)
         before.save(out / "01-vulkan-client.png")
         # QML panels follow DomeD's light palette; the XR scene preserves alpha.
-        assert min(before.getpixel((before.width - 15, 75))[:3]) > 170, "DomeD light theme not applied to inspector"
+        assert min(before.getpixel((before.width - 15, 150))[:3]) > 170, "DomeD light theme not applied to inspector"
         places_width = min(200, before.width * .2)
         inspector_width = min(310, before.width * .28)
-        background_pixel = (int(places_width + 12), 75)
+        background_pixel = (int(places_width + 12), 150)
         assert before.getpixel(background_pixel)[3] == 0, "XR background lost its alpha"
         def places_median(image):
             # The Places list scrolls to its current location. A single pixel
             # can land on an icon/label when adding entries such as Trash.
-            return ImageStat.Stat(image.crop((0, 80, int(places_width), image.height - 20)).convert("RGB")).median
+            return ImageStat.Stat(image.crop((0, 155, int(places_width), image.height - 20)).convert("RGB")).median
         assert min(places_median(before)) > 170, "Places did not follow the light theme"
+        # A settled scene must not continuously read back and commit buffers.
+        def commits():
+            return len(re.findall(r" -> wl_surface#\d+\.commit\(", (out / "client.log").read_text()))
+        time.sleep(.3)
+        idle_commits = commits()
+        time.sleep(.4)
+        assert commits() - idle_commits <= 1, "Idle scene continuously commits unchanged frames"
         # One object covers the center of the view between Places and inspector.
         x, y = places_width + (before.width - places_width - inspector_width) / 2, before.height * .56
         uv = [x / before.width, y / before.height]
@@ -157,46 +165,17 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         selected = wait(frame)
         assert ImageChops.difference(before.convert("RGB"), selected.convert("RGB")).getbbox(), "LMB selection did not update client content"
         selected.save(out / "02-selected.png")
-        popup = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
-        assert popup["parent"] == wid and popup["id"] >= (1 << 48), popup
-        assert len(state()["windows"]) == 1, "Preview consumed a normal window/lane slot"
-        assert 0 <= popup["anchor"]["x"] <= before.width and 0 <= popup["anchor"]["y"] <= before.height, popup
-        light_popup = wait(lambda: frame(popup["id"]))
-        light_popup.save(out / "03-file-preview.png")
-        assert min(light_popup.getpixel((5,5))[:3]) > 180, "Preview does not use DomeD light palette"
-        assert abs(light_popup.getpixel((5,5))[3] - 220) <= 1, "Preview does not use DomeD panel opacity"
+        time.sleep(.5)
+        assert not state().get("popups", []), "Selection opened a redundant preview popup"
         set_appearance(False, "#53ad7f", [.02, .03, .04])
-        def dark_popup_ready():
-            image = frame(popup["id"])
-            return image if image and max(image.getpixel((5,5))[:3]) < 65 else None
-        wait(dark_popup_ready).save(out / "03b-live-dark-preview.png")
         def dark_main_ready():
             image = frame()
             return image if image and max(places_median(image)) < 70 and max(image.getpixel((5,5))[:3]) < 70 and image.getpixel(background_pixel)[3] == 0 else None
-        wait(dark_main_ready).save(out / "03c-live-dark-main.png")
+        wait(dark_main_ready).save(out / "03-live-dark-inspector.png")
         def popup_click(surface, uv):
             packet([{"kind": "motion", "id": surface, "uv": uv},
                     {"kind": "button", "button": 0x110, "pressed": True},
                     {"kind": "button", "button": 0x110, "pressed": False}])
-        # Close is the rightmost button. This targets the real popup texture's UVs.
-        popup_click(popup["id"], [.85, .94])
-        wait(lambda: not state().get("popups", []))
-        time.sleep(.4) # DomeD suspends hit targets during popup focus transitions.
-        # Selecting the same entry again reopens a dismissed preview.
-        click(0x110)
-        reopened = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
-        wait(lambda: frame(reopened["id"])).save(out / "04-reopened-preview.png")
-        # RMB on the file preview creates a child context surface, associated with
-        # the exact popup-local point rather than an invented client positioner.
-        packet([{"kind": "motion", "id": reopened["id"], "uv": [.5, .4]},
-                {"kind": "button", "button": 0x111, "pressed": True},
-                {"kind": "button", "button": 0x111, "pressed": False}])
-        child_menu = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is not None), None))
-        assert child_menu["parent"] == reopened["id"], child_menu
-        assert abs(child_menu["context_at"][0] - 170) <= 1, child_menu
-        assert abs(child_menu["context_at"][1] - reopened["anchor"]["h"] * .4) <= 1, child_menu
-        wait(lambda: frame(child_menu["id"])).save(out / "05-preview-context.png")
-        # Native Qt menus own keyboard navigation. End + Return selects Properties.
         xd = display.Display(env["DISPLAY"])
         host = wait(lambda: next((w for w in xd.screen().root.query_tree().children if str(w.get_wm_name() or "").startswith("Dome")), None))
         host.set_input_focus(X.RevertToParent, X.CurrentTime); xd.sync()
@@ -204,26 +183,18 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
             code = xd.keysym_to_keycode(XK.string_to_keysym(name))
             for kind in (X.KeyPress, X.KeyRelease):
                 xtest.fake_input(xd, kind, code); xd.sync(); time.sleep(.03)
-        key("Escape")
-        wait(lambda: not any(p.get("context_at") is not None for p in state().get("popups", [])))
-        # A single RMB on the file must work even while its preview owns a grab.
         click(0x111)
         menu = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is not None), None))
         assert menu["root"] == wid and menu["parent"] == wid, menu
         assert all(abs(a-b) < 1 for a,b in zip(menu["context_at"], (x,y))), menu
         assert len(state()["windows"]) == 1
-        wait(lambda: frame(menu["id"])).save(out / "05b-file-context.png")
-        key("End"); key("Return")
-        properties = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is None), None))
-        assert properties["parent"] == wid, properties
-        popup_click(properties["id"], [.85,.94])
+        wait(lambda: frame(menu["id"])).save(out / "04-file-context.png")
+        key("End"); key("Return") # Properties focuses the persistent inspector.
         wait(lambda: not state().get("popups", []))
-        click(0x110)
-        wait(lambda: state().get("popups", []))
-        # Outside-click dismissal still works after nested/native context menus.
-        packet([{"kind": "motion", "id": wid, "uv": [.1,.8]},
-                {"kind": "button", "button": 0x110, "pressed": True},
-                {"kind": "button", "button": 0x110, "pressed": False}])
+        time.sleep(.4) # DomeD releases the popup pointer transition.
+        click(0x111)
+        wait(lambda: any(p.get("context_at") is not None for p in state().get("popups", [])))
+        key("Escape")
         wait(lambda: not state().get("popups", []))
         time.sleep(.3)
         start = wait(frame)
@@ -280,12 +251,12 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         time.sleep(.15)
         wait(lambda: frame(long_menu["id"])).save(out / "08-long-context-bottom.png")
         popup_click(long_menu["id"], [.5, (viewport["height"] - 24 - 20) / viewport["height"]])
-        wait(lambda: any(p.get("context_at") is None for p in state()["popups"]))
+        wait(lambda: not state().get("popups", []))
         key("Escape")
         wait(lambda: not state().get("popups", []))
         client.terminate(); client.wait(timeout=3)
         wait(lambda: not state()["windows"] and not state().get("popups", []))
-        # Internal Trash uses the same spatial preview and a specialised native menu.
+        # Internal Trash uses the persistent inspector and a specialised native menu.
         trash = Path(env["XDG_DATA_HOME"]) / "Trash"
         (trash / "files").mkdir(parents=True)
         (trash / "info").mkdir()
@@ -300,8 +271,9 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         image = wait(frame); time.sleep(.6)
         uv = [(places_width + (image.width - places_width - inspector_width)/2) / image.width, .56]
         click(0x110)
-        trash_preview = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
-        wait(lambda: frame(trash_preview["id"])).save(out / "09-trash-preview.png")
+        time.sleep(.5)
+        assert not state().get("popups", []), "Trash selection opened a preview popup"
+        wait(frame).save(out / "09-trash-inspector.png")
         click(0x111)
         trash_menu = wait(lambda: next((p for p in state().get("popups", []) if p.get("context_at") is not None), None))
         wait(lambda: frame(trash_menu["id"])).save(out / "10-trash-context.png")
@@ -320,6 +292,9 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
                 return json.load(response)
         def heartbeat():
             while not heartbeat_stop.is_set():
+                if heartbeat_paused.is_set():
+                    heartbeat_stop.wait(.05)
+                    continue
                 post("/api/xr-session", {"visible": True, "focused": True, "head": {"position_m": [0,1.4,0], "orientation_xyzw": [0,0,0,1]}, "horizontal_fov_deg": 100})
                 heartbeat_stop.wait(.1)
         pulse = threading.Thread(target=heartbeat, daemon=True); pulse.start()
@@ -366,10 +341,10 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         close_window()
         win = manager("ShowItemProperties", (fixtures / "select-me.txt").as_uri(), "xr"); wid = win["id"]
         assert win["origin"] == "xr" and not win["desktop_visible"], win
-        property_popup = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
-        wait(lambda: frame(property_popup["id"])).save(out / "12-filemanager-properties.png")
-        popup_click(property_popup["id"], [.85,.94])
-        wait(lambda: not state().get("popups", [])); close_window()
+        wait(frame); time.sleep(.5)
+        assert not state().get("popups", []), "Properties opened a redundant preview popup"
+        wait(frame).save(out / "12-filemanager-properties.png")
+        close_window()
         # Super+E follows the active XR realm and uses the configured default manager.
         modifier = xd.keysym_to_keycode(XK.string_to_keysym("Super_L"))
         xtest.fake_input(xd, X.KeyPress, modifier); xd.sync(); key("e")
@@ -389,8 +364,18 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
                 xtest.fake_input(xd, X.ButtonPress if down else X.ButtonRelease, number); xd.sync(); time.sleep(.05)
         motion(*physical)
         def aim(target=uv):
-            wait(lambda: not control()["mouse"])
+            # Current DomeD keeps physical mouse ownership until the input
+            # realm changes. Briefly relinquish focus before seeding a fresh
+            # synthetic aim; an idle timeout no longer releases ownership.
+            heartbeat_paused.set()
+            time.sleep(.12)
+            session = {"visible": True, "focused": False, "head": {"position_m": [0,1.4,0], "orientation_xyzw": [0,0,0,1]}, "horizontal_fov_deg": 100}
+            post("/api/xr-session", session)
+            wait(lambda: control()["input_realm"] == "desktop" and not control()["mouse"])
+            post("/api/xr-session", {**session, "focused": True})
+            wait(lambda: control()["input_realm"] == "xr")
             packet([{"kind": "motion", "id": wid, "uv": target}], [{"op": "focus", "id": wid}]); time.sleep(.08)
+            heartbeat_paused.clear()
             motion(physical[0]+1, physical[1])
             wait(lambda: control()["mouse"] and control().get("cursor") and control()["cursor"]["id"] == wid)
         def view_crop(image):
@@ -401,9 +386,9 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
             assert ImageChops.difference(view_crop(before).convert("RGB"), view_crop(after).convert("RGB")).getbbox(), message
             return after
         aim(); button(1)
-        physical_popup = wait(lambda: next((p for p in state().get("popups", []) if p["root"] == wid), None))
-        wait(lambda: frame(physical_popup["id"])).save(out / "13-physical-mouse-preview.png")
-        key("Escape"); wait(lambda: not state().get("popups", []))
+        time.sleep(.5)
+        assert not state().get("popups", []), "Physical selection opened a preview popup"
+        wait(frame).save(out / "13-physical-mouse-inspector.png")
         aim(); button(3)
         wait(lambda: any(p.get("context_at") is not None for p in state().get("popups", [])))
         key("Escape"); wait(lambda: not state().get("popups", []))
@@ -420,17 +405,17 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         button(1, True); motion(physical[0]+30, physical[1]+22); button(1, False)
         changed(before, "Physical XR LMB background drag did not tilt")
         close_window()
-        # Preview delay must leave real mouse double-clicks usable for opening folders.
+        # Selection must leave real mouse double-clicks usable for opening folders.
         double = Path(runtime) / "double"; (double / "child").mkdir(parents=True)
         win = manager("ShowFolders", double.as_uri(), "xr"); wid = win["id"]
         wait(frame); time.sleep(.5); aim()
         button(1); button(1)
         wait(lambda: any(w["id"] == wid and w["title"].endswith("/double/child") for w in state()["windows"]))
-        assert not state().get("popups", []), "Preview stole the double-click pointer grab"
+        assert not state().get("popups", []), "Selection stole the double-click pointer grab"
         close_window()
         heartbeat_stop.set(); pulse.join(timeout=2)
         xd.close()
-        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup pointer input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore, desktop/XR named and FD launch realms, MIME defaults, FileManager1 reveal/properties, Super+E, physical XR LMB/RMB/MMB/wheel/scroll-button/double-click and cleanup")
+        print("PASS: Vulkan/DomeD changed-frame capture; persistent inspector without preview popups; live theme; native context menus, Properties/Escape, oversized menus; Trash Restore; desktop/XR launch realms; FileManager1; physical navigation and double-click; cleanup")
     finally:
         heartbeat_stop.set()
         if dome is not None and dome.poll() is None:

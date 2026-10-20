@@ -13,6 +13,12 @@ Node {
     property real yaw: 0
     property real pitch: 0
     property bool showBase: true
+    property real texturePixelsPerUnit: 16
+    function textureResolution(extent, selected) {
+        if (selected) return 512
+        const pixels = Math.max(extent.x, extent.z) * texturePixelsPerUnit
+        return pixels <= 64 ? 64 : pixels <= 128 ? 128 : pixels <= 256 ? 256 : 512
+    }
     scale: Qt.vector3d(zoom, zoom, zoom)
     position: Qt.vector3d(panX, panY, panZ)
     eulerRotation.y: yaw
@@ -60,6 +66,7 @@ Node {
             required property string thumbnail
             required property string fileName
             required property bool isDirectory
+            readonly property int textureSize: world.textureResolution(extent, files.selected === index)
             position: center
             Model {
                 property int entryIndex: entry.index
@@ -87,10 +94,11 @@ Node {
                     lighting: PrincipledMaterial.NoLighting
                     baseColorMap: Texture {
                         sourceItem: Item {
+                            objectName: "objectTextureSource" + entry.index
                             // Match the physical top's aspect ratio. A square
                             // source stretched over a treemap tile distorts
                             // both the image and the text, even with AspectFit.
-                            readonly property real pixelsPerUnit: 512 / Math.max(entry.extent.x, entry.extent.z)
+                            readonly property real pixelsPerUnit: entry.textureSize / Math.max(entry.extent.x, entry.extent.z)
                             width: Math.max(1, Math.round((top.rotated ? entry.extent.z : entry.extent.x) * pixelsPerUnit))
                             height: Math.max(1, Math.round((top.rotated ? entry.extent.x : entry.extent.z) * pixelsPerUnit))
                             Rectangle {
@@ -100,7 +108,7 @@ Node {
                             Image {
                                 objectName: "objectThumbnail" + entry.index
                                 anchors { top: parent.top; left: parent.left; right: parent.right; bottom: filenameBand.top }
-                                sourceSize: Qt.size(256, 256)
+                                sourceSize: Qt.size(Math.min(256, entry.textureSize), Math.min(256, entry.textureSize))
                                 source: entry.isDirectory ? "" : entry.thumbnail
                                 asynchronous: true
                                 fillMode: Image.PreserveAspectFit
@@ -129,9 +137,7 @@ Node {
                                 }
                             }
                         }
-                        generateMipmaps: true
                         minFilter: Texture.Linear
-                        mipFilter: Texture.Linear
                     }
                     cullMode: Material.NoCulling
                 }

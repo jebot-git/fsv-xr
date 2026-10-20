@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-project('fsvr', 'cpp', version: '0.1.0', default_options: ['cpp_std=c++17', 'warning_level=2'])
+project('fsvr', 'cpp', version: '0.1.0', default_options: ['cpp_std=c++17', 'warning_level=2', 'buildtype=release', 'b_lto=true', 'b_ndebug=if-release'])
 qt = import('qt6')
 deps = dependency('qt6', version: '>=6.8', modules: ['Core', 'Gui', 'Widgets', 'Qml', 'Quick', 'QuickWidgets', 'QuickControls2', 'Quick3D', 'Concurrent'])
 xr = dependency('qt6', version: '>=6.10', modules: ['Quick3DXr'], required: get_option('xr'))

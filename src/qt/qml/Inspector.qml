@@ -9,14 +9,18 @@ Rectangle {
     height: 570
     color: Theme.surface
     radius: 8
+    clip: true
     signal requestAction(string action)
+    function reveal() { details.contentY = 0; forceActiveFocus() }
     Flickable {
-        anchors.fill: parent
+        id: details
+        anchors { top: parent.top; left: parent.left; right: parent.right; bottom: buttons.top }
         anchors.margins: 16
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
         ColumnLayout {
             id: column
             width: parent.width
@@ -24,7 +28,8 @@ Rectangle {
             Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "FILE INSPECTOR"; color: Theme.muted; font.pixelSize: 12; font.letterSpacing: 2 }
             Image {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 170
+                Layout.preferredHeight: Math.min(170, panel.height * .3)
+                visible: files.selected >= 0
                 source: files.selection.thumbnail || ""
                 sourceSize: Qt.size(512, 512)
                 asynchronous: true
@@ -46,10 +51,29 @@ Rectangle {
                 text: files.inTrash && files.selected >= 0 ? "Original location: " + (files.selection.originalPath || "Unavailable — cannot restore automatically") + "\nDeleted: " + (files.selection.deleted || "Unknown") : files.selection.path || files.root
                 Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.muted; font.pixelSize: 11
             }
-            RowLayout {
-                Button { palette: Theme.controlPalette(Theme.paletteRevision); objectName: "inspectorOpen"; text: files.inTrash ? "Restore" : "Open"; enabled: files.selected >= 0 && !!files.selection.canOpen && !files.busy && (!files.inTrash || files.selection.canRestore); onClicked: files.open(files.selected) }
-                Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Actions…"; enabled: files.selected >= 0 && !files.busy; onClicked: panel.requestAction("menu") }
-            }
+        }
+    }
+    RowLayout {
+        id: buttons
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 12 }
+        spacing: 8
+        Button {
+            palette: Theme.controlPalette(Theme.paletteRevision)
+            objectName: "inspectorOpen"
+            Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1
+            leftPadding: 8; rightPadding: 8
+            text: files.inTrash ? "Restore" : "Open"
+            enabled: files.selected >= 0 && !!files.selection.canOpen && !files.busy && (!files.inTrash || files.selection.canRestore)
+            onClicked: files.open(files.selected)
+        }
+        Button {
+            palette: Theme.controlPalette(Theme.paletteRevision)
+            objectName: "inspectorActions"
+            Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1
+            leftPadding: 8; rightPadding: 8
+            text: "Actions…"
+            enabled: files.selected >= 0 && !files.busy
+            onClicked: panel.requestAction("menu")
         }
     }
 }

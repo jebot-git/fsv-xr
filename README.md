@@ -28,11 +28,22 @@ sudo cmake --install build --prefix /usr/local
 sudo update-desktop-database /usr/local/share/applications
 ```
 
+Builds default to Release optimization (`-O3` with GCC/Clang). CMake enables
+link-time optimization when the toolchain supports it; disable it with
+`-DFSV_LTO=OFF`. Choose `-DCMAKE_BUILD_TYPE=Debug` or `RelWithDebInfo` explicitly
+for debugging. Meson defaults to `--buildtype=release -Db_lto=true`; use
+`-Db_lto=false` if the toolchain lacks LTO support. Existing Meson build
+directories retain their settings. Update them with:
+
+```sh
+meson configure builddir --buildtype=release -Db_lto=true -Db_ndebug=if-release
+```
+
 The system install provides **fsvr** in the application menu, plus **fsvr
 (OpenXR)** when standalone XR is built. Keep `/usr/local/bin` in the desktop
 session's `PATH`. A per-user alternative is `cmake --install build --prefix "$HOME/.local"`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
 Desktop launches retain desktop presentation; XR launches use transparent scenes
-and spatial popups, including when a headset is already active. Its menu actions can explicitly select desktop or the
+and native context menus, including when a headset is already active. Its menu actions can explicitly select desktop or the
 current DomeD session. The OpenXR entry starts its own headset session using the
 active runtime; use the main entry inside DomeD. The install includes Dome-specific MIME defaults; run `fsvr-dome-default`
 to enable the user override for DomeD without changing KDE/GNOME defaults.
@@ -223,36 +234,30 @@ use arrow keys to tilt the view. DomeD owns window/panel placement.
 
 DomeD's current compositor does not provide the presentation support required by
 this client's native Vulkan swapchain. Both DomeD launch realms therefore render the same Qt
-Quick scene offscreen with **Vulkan**, reads it back at up to 30 Hz, and presents a
+Quick scene offscreen with **Vulkan**, reads changed frames back at up to 30 Hz, and presents a
 Qt Widgets raster Wayland surface (`wl_shm`). This has CPU/readback overhead and
 matches DomeD's current CPU client-texture bridge. Desktop sessions outside DomeD
 use native Vulkan presentation.
 
-Selecting a file in the DomeD XR realm opens a real Wayland `xdg_popup` containing its MIME
-type, size, modification time, owner, path, and an asynchronous thumbnail preview.
-The popup attaches at the file object's projected top centre; it does not take a
-normal window/lane slot. Single-click previews wait for the system double-click
-interval so a mouse double-click can open a folder. Programmatic Properties
-requests before any input use a non-grabbing `xdg_popup`. DomeD controls placement: in room-dome view it raises the
-panel above its owning window and draws a beam to the file attachment point;
-direct view aligns it with the attachment point. The preview supports mouse and keyboard
-input, Open, Close, Escape and outside-click dismissal. Refreshing, navigating or
-changing selection closes stale previews. Selecting a dismissed file reopens it.
+Idle scenes reuse the last captured frame. Tile textures use 64–512 pixel
+resolution tiers as the desktop view zooms, and selected tiles retain the full
+512 pixel resolution. The desktop camera culls objects outside its view.
 
-RMB opens a native Wayland context menu.
-DomeD associates it with the exact click point, places its bottom centre 8 logical
-pixels above that point, and applies its direct-view/dome depth, beam, work-area
-clamping and bounded scroll-viewport policies. RMB on the preview opens a child
-menu attached to that preview. Qt handles native menu keyboard navigation and
-Escape; DomeD routes mouse input and owns oversized-menu arrow/wheel scrolling.
-fsvr exports the full menu buffer to avoid nesting Qt's screen-height scroller
-inside DomeD's viewport. Properties reopens the file preview. File operations and confirmation dialogs use
-the same backend as the desktop UI.
+Selecting a file updates the persistent file inspector, including its thumbnail,
+MIME type, size, modification time, owner and path. Properties focuses that
+inspector. Open and Actions stay pinned below its scrollable details; selection
+does not create a separate preview popup.
+
+RMB opens a native Wayland context menu. DomeD owns its placement and oversized
+menu scrolling; Qt handles menu keyboard navigation and Escape. fsvr exports the
+full menu buffer to avoid nesting Qt's screen-height scroller inside DomeD's
+viewport. File operations and confirmation dialogs use the same backend as the
+desktop UI.
 
 DomeD and standalone XR modes follow `$XDG_CONFIG_HOME/dome/appearance.json`
 (defaulting to `~/.config/dome/appearance.json`). Light/dark colours match DomeD's
 shell palette; accent, scene background and panel opacity follow its saved settings.
-Changes apply live to QML controls, the Vulkan view, and open preview panels,
+Changes apply live to QML controls, the Vulkan view, and the inspector,
 including when DomeD atomically replaces the settings file. Invalid settings retain
 the last valid theme. Outside these XR modes, fsvr uses the host Qt palette.
 XR modes use the Fusion Qt Quick Controls style so host-specific styles cannot
@@ -266,7 +271,7 @@ python3 tests/domed.py /path/to/DomeD/target/debug/dome-compositor build/fsvr
 
 This starts and stops an isolated nested compositor on a private Xvfb display,
 checks main/popup textures, injects LMB/RMB/MMB XR seat events, verifies live theme
-changes, exact context anchors, nested menu input, native keyboard handling,
+changes, idle frame reuse, exact context anchors, native keyboard handling,
 oversized menu scrolling, popup dismissal and cleanup. Captures are saved in
 `build/domed-probe/`.
 It also checks desktop/XR socket and inherited-FD launches while XR is active,
@@ -284,8 +289,8 @@ XR_RUNTIME_JSON=/path/to/runtime.json ./build/fsvr --xr /path
 
 Qt Quick 3D XR owns session lifecycle, Vulkan graphics binding, stereo views and
 swapchains. A fixed control panel offers navigation, file information/actions,
-and zoom controls. Selecting a file also opens a preview above its 3D object; the
-panel follows filesystem pan/zoom and has a Close button. Tracked-hand joints drive
+and zoom controls. Selecting a file updates the control panel inspector; the
+inspector remains in the fixed control panel. Tracked-hand joints drive
 palm-normalized pinch detection:
 index selects, ring opens actions in the fixed panel, middle + motion drags the
 filesystem, and simultaneous middle pinches scale it. Aim rays target file objects

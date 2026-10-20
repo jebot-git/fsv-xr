@@ -35,39 +35,12 @@ ThemedPanel {
     onPitchChanged: storeView()
     Component.onCompleted: { restoreView(); viewReady = true }
     Connections { target: files; function onViewStateChanged() { if (window.viewReady) window.restoreView() } }
-    Connections { target: files; function onPropertiesRequested() {
-        requestedProperties.selectedPath = files.selection.path || ""
-        requestedProperties.restart()
-    } }
-    Timer {
-        id: requestedProperties
-        property string selectedPath: ""
-        interval: 16; repeat: true
-        onTriggered: {
-            if (!selectedPath || files.selection.path !== selectedPath) stop()
-            else if (!window.spatialPopups) { actions.showProperties(); stop() }
-            else if (window.previewSelection()) stop()
-        }
-    }
-    Timer {
-        id: clickPreview
-        property string selectedPath: ""
-        interval: Qt.styleHints.mouseDoubleClickInterval
-        onTriggered: { if (files.selection.path === selectedPath && !mouse.pressed) window.previewSelection() }
-    }
-    signal previewRequested(point anchor)
+    Connections { target: files; function onPropertiesRequested() { window.showInspector() } }
+    function showInspector() { inspector.reveal() }
     signal contextMenuRequested(point anchor)
     function showActionsAt(x, y) {
         if (spatialPopups) contextMenuRequested(Qt.point(x, y))
         else actions.show(x, y)
-    }
-    function previewSelection() {
-        if (!spatialPopups || files.selected < 0 || view.width <= 0 || view.height <= 0) return false
-        const top = world.mapPositionToScene(world.selectionTop(files.selection))
-        const projected = view.mapFrom3DScene(top)
-        if (projected.z <= 0 || !isFinite(projected.x) || !isFinite(projected.y)) return false
-        previewRequested(view.mapToItem(window, projected.x, projected.y))
-        return true
     }
     function changeZoom(delta) {
         const target = Math.max(.15, Math.min(8, zoom * Math.exp(delta)))
@@ -82,22 +55,38 @@ ThemedPanel {
     }
     function rotateView(horizontal, vertical) { yaw += horizontal; pitch = Math.max(-30, Math.min(45, pitch + vertical)) }
     readonly property bool active: Window.window ? Window.window.active : false
-    ToolBar { palette: Theme.controlPalette(Theme.paletteRevision);
+    ToolBar {
         id: toolbar
-        anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
-        RowLayout {
-            anchors.fill: parent; anchors.margins: 5
-            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: " fsvr "; font.bold: true; font.pixelSize: 22 }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
-            TextField { palette: Theme.controlPalette(Theme.paletteRevision); id: location; objectName: "locationField"; Layout.fillWidth: true; text: files.root; onAccepted: files.navigate(text) }
-            ComboBox { palette: Theme.controlPalette(Theme.paletteRevision);
+        palette: Theme.controlPalette(Theme.paletteRevision)
+        anchors { top: parent.top; left: parent.left; right: parent.right }
+        padding: 6
+        contentItem: GridLayout {
+            readonly property bool compact: window.width < 900
+            columns: compact ? 3 : 5
+            columnSpacing: 6; rowSpacing: 4
+            RowLayout {
+                spacing: 4
+                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr"; font.bold: true; font.pixelSize: 22 }
+                ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
+                ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
+            }
+            TextField {
+                id: location
+                objectName: "locationField"
+                palette: Theme.controlPalette(Theme.paletteRevision)
+                Layout.fillWidth: true; Layout.minimumWidth: 40
+                Layout.columnSpan: parent.compact ? 2 : 1
+                text: files.root; onAccepted: files.navigate(text)
+            }
+            ComboBox {
+                palette: Theme.controlPalette(Theme.paletteRevision)
+                Layout.preferredWidth: 120
                 model: ["Map", "Tree", "Disc"]
                 currentIndex: ["map", "tree", "disc"].indexOf(files.layout)
                 onActivated: files.layout = ["map", "tree", "disc"][currentIndex]
             }
             ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset View"; onClicked: { window.zoom = 1; window.panX = 0; window.panY = 0; window.panZ = 0; window.yaw = 0; window.pitch = 0 } }
+            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
         }
     }
     Tabs {
@@ -124,9 +113,19 @@ ThemedPanel {
                     position: Qt.vector3d(0, 165, 200)
                     eulerRotation.x: -40
                     clipNear: .1; clipFar: 5000
+                    frustumCullingEnabled: true
                 }
                 camera: camera
-                World { id: world; zoom: window.zoom; panX: window.panX; panY: window.panY; panZ: window.panZ; yaw: window.yaw; pitch: window.pitch; showBase: !window.spatialPopups }
+                World {
+                    id: world
+                    zoom: window.zoom; panX: window.panX; panY: window.panY; panZ: window.panZ
+                    yaw: window.yaw; pitch: window.pitch; showBase: !window.spatialPopups
+                    // Two texture pixels per projected pixel, rounded to tiers
+                    // by World to avoid reallocating textures on every gesture.
+                    texturePixelsPerUnit: 2 * view.height * window.zoom
+                        / (2 * Math.tan(camera.fieldOfView * Math.PI / 360)
+                           * Math.max(20, camera.scenePosition.minus(world.scenePosition).length()))
+                }
             }
             MouseArea {
                 id: mouse
@@ -140,16 +139,13 @@ ThemedPanel {
                 property bool scrollWasActive: false
                 property bool rotating: false
                 property bool fileDrag: false
-                property bool dragged: false
                 onPressed: event => {
-                    clickPreview.stop()
                     scrollWasActive = scrollMode
                     scrollMode = false
                     previous = Qt.point(event.x, event.y)
                     start = previous
                     forceActiveFocus()
                     rotating = false
-                    dragged = false
                     fileDrag = false
                     if (event.button !== Qt.MiddleButton) {
                         const hit = view.pick(event.x, event.y)
@@ -169,8 +165,6 @@ ThemedPanel {
                     if (fileDrag && (pressedButtons & Qt.LeftButton)
                             && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) >= Qt.styleHints.startDragDistance) {
                         fileDrag = false
-                        dragged = true
-                        clickPreview.stop()
                         files.startDrag()
                         return
                     }
@@ -187,12 +181,6 @@ ThemedPanel {
                 }
                 onReleased: event => {
                     rotating = false
-                    if (!dragged && event.button === Qt.LeftButton && !(event.modifiers & Qt.AltModifier) && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5 && window.spatialPopups) {
-                        // Allow a real mouse double-click to open a directory
-                        // before a preview popup can take the pointer grab.
-                        clickPreview.selectedPath = files.selection.path || ""
-                        clickPreview.restart()
-                    }
                     // A short MMB click enables scroll-button zoom without
                     // needing to hold a mouse button or keyboard modifier.
                     if (!scrollWasActive && event.button === Qt.MiddleButton && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5) {
@@ -200,11 +188,11 @@ ThemedPanel {
                     }
                 }
                 hoverEnabled: true
-                onCanceled: { fileDrag = false; clickPreview.stop(); scrollMode = false; rotating = false }
+                onCanceled: { fileDrag = false; scrollMode = false; rotating = false }
                 onExited: { if (!pressed) scrollMode = false }
                 Connections { target: window; function onActiveChanged() { if (!window.active) { mouse.scrollMode = false } } }
-                onDoubleClicked: event => { clickPreview.stop(); if (event.button === Qt.LeftButton) files.open(files.selected) }
-                onWheel: event => { clickPreview.stop(); window.changeZoom(event.angleDelta.y ? event.angleDelta.y / 1200 : event.pixelDelta.y / 600); event.accepted = true }
+                onDoubleClicked: event => { if (event.button === Qt.LeftButton) files.open(files.selected) }
+                onWheel: event => { window.changeZoom(event.angleDelta.y ? event.angleDelta.y / 1200 : event.pixelDelta.y / 600); event.accepted = true }
                 Keys.onEscapePressed: { scrollMode = false; files.selected = -1 }
                 Keys.onLeftPressed: { scrollMode = false; window.rotateView(-5, 0) }
                 Keys.onRightPressed: { scrollMode = false; window.rotateView(5, 0) }
@@ -246,23 +234,32 @@ ThemedPanel {
             Label { palette: Theme.controlPalette(Theme.paletteRevision);
                 anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 16
                 text: files.busy ? files.cached ? "Refreshing cached view…" : "Loading…" : mouse.scrollMode ? "Scroll zoom active · move up/down · click or Escape to stop" : "LMB select / drag files · drag background or arrow keys to tilt · RMB actions · MMB pan / scroll-zoom"
+                width: Math.max(0, parent.width - 32)
+                wrapMode: Text.WordWrap
                 color: Theme.muted; font.pixelSize: 11
             }
             BusyIndicator { anchors.centerIn: parent; running: files.busy }
         }
         Inspector {
+            id: inspector
+            objectName: "fileInspector"
             Layout.preferredWidth: Math.min(310, window.width * .28); Layout.fillHeight: true
-            onRequestAction: window.showActionsAt(window.width - 320, 80)
+            onRequestAction: {
+                const anchor = inspector.mapToItem(window, 12, inspector.height - 60)
+                window.showActionsAt(anchor.x, anchor.y)
+            }
         }
     }
     Label { palette: Theme.controlPalette(Theme.paletteRevision);
         id: status
+        objectName: "statusBar"
+        height: visible ? implicitHeight : 0
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
         visible: text.length > 0
         text: files.warning
         padding: 8; color: Theme.text; wrapMode: Text.WordWrap
     }
-    FileActions { id: actions; objectName: "fileActions"; anchors.fill: parent }
+    FileActions { id: actions; objectName: "fileActions"; anchors.fill: parent; onInspectorRequested: window.showInspector() }
     Shortcut { sequence: "Ctrl+C"; onActivated: files.clipboard(false) }
     Shortcut { sequence: "Ctrl+X"; onActivated: files.clipboard(true) }
     Shortcut { sequence: "Ctrl+V"; onActivated: files.paste() }

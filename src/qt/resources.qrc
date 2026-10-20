@@ -12,6 +12,5 @@
 <file alias="Inspector.qml">qml/Inspector.qml</file>
 <file alias="FileActions.qml">qml/FileActions.qml</file>
 <file alias="Xr.qml">qml/Xr.qml</file>
-<file alias="SpatialPreview.qml">qml/SpatialPreview.qml</file>
 <file alias="XrHand.qml">qml/XrHand.qml</file>
 </qresource></RCC>

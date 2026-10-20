@@ -25,6 +25,78 @@ class UiTest : public QObject {
         return nullptr;
     }
 private slots:
+    void inspectorButtonsStayInsideFrame() {
+        QTemporaryDir temp;
+        QFile file(temp.filePath(QString(180, 'x') + ".txt"));
+        QVERIFY(file.open(QIODevice::WriteOnly)); file.write("Inspector layout fixture"); file.close();
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.rootContext()->setContextProperty("xrMode", false);
+        engine.rootContext()->setContextProperty("domeMode", false);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy()); files.setSelected(0);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto inspector = window->findChild<QQuickItem *>("fileInspector"); QVERIFY(inspector);
+        auto open = window->findChild<QQuickItem *>("inspectorOpen"); QVERIFY(open);
+        auto actions = window->findChild<QQuickItem *>("inspectorActions"); QVERIFY(actions);
+        auto status = window->findChild<QQuickItem *>("statusBar"); QVERIFY(status);
+        // Exercise both a warning banner and long, scrollable metadata at the
+        // compositor's compact window size as well as the desktop default.
+        status->setProperty("text", "A directory warning that must stay below the inspector buttons.");
+        for (const auto &size : {QSize(720, 460), QSize(1280, 820)}) {
+            window->resize(size); QTest::qWait(100);
+            const QRectF bounds(0, 0, inspector->width(), inspector->height());
+            for (auto button : {open, actions}) {
+                const QRectF rect = button->mapRectToItem(inspector, button->boundingRect());
+                QVERIFY2(bounds.contains(rect), "Inspector button extends beyond the panel");
+                QVERIFY(button->width() >= 60);
+                const auto bottom = button->mapToScene(QPointF(0, button->height())).y();
+                QVERIFY(bottom <= status->mapToScene(QPointF(0, 0)).y());
+            }
+            QVERIFY(open->mapRectToItem(inspector, open->boundingRect()).right()
+                <= actions->mapRectToItem(inspector, actions->boundingRect()).left());
+            auto fileActions = window->findChild<QObject *>("fileActions"); QVERIFY(fileActions);
+            QVERIFY(QMetaObject::invokeMethod(fileActions, "showProperties"));
+            QVERIFY(inspector->hasActiveFocus());
+            QVERIFY(window->grabWindow().save(QString("fsvr-inspector-%1.png").arg(size.width())));
+        }
+    }
+    void tileTexturesFollowZoomAndSelection() {
+        QTemporaryDir temp;
+        for (int i = 0; i < 100; ++i) {
+            QFile file(temp.filePath(QString("tile-%1.txt").arg(i)));
+            QVERIFY(file.open(QIODevice::WriteOnly)); file.write("Texture resolution fixture");
+        }
+        FileSystem files;
+        QQmlApplicationEngine engine;
+        engine.addImageProvider("thumbnail", new ThumbnailProvider);
+        engine.rootContext()->setContextProperty("files", &files);
+        engine.rootContext()->setContextProperty("xrMode", false);
+        engine.rootContext()->setContextProperty("domeMode", false);
+        engine.load(QUrl("qrc:/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
+        QCOMPARE(files.rowCount(), 100);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto texture = window->findChild<QQuickItem *>("objectTextureSource0"); QVERIFY(texture);
+        auto longestSide = [&] { return qMax(texture->width(), texture->height()); };
+        QTRY_VERIFY(longestSide() >= 64 && longestSide() < 512);
+        const auto overviewSize = longestSide();
+        files.setSelected(0);
+        QTRY_COMPARE(longestSide(), 512.);
+        files.setSelected(-1);
+        QTRY_COMPARE(longestSide(), overviewSize);
+        window->setProperty("zoom", 8);
+        QTRY_VERIFY(longestSide() > overviewSize);
+        QVERIFY(!window->grabWindow().isNull());
+        window->setProperty("zoom", 1);
+        QTRY_COMPARE(longestSide(), overviewSize);
+    }
     void archiveActions() {
         QTemporaryDir temp;
         QFile file(temp.filePath("sample.txt")); QVERIFY(file.open(QIODevice::WriteOnly));
@@ -476,25 +548,6 @@ private slots:
         QVERIFY(window->grabWindow().save("fsvr-map-preview.png"));
     }
 #if FSV_HAS_XR
-    void spatialPreviewSelectionLifecycle() {
-        QTemporaryDir temp;
-        QFile file(temp.filePath("preview.txt")); QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write("Spatial preview"); file.close();
-        FileSystem files;
-        files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
-        QQmlEngine engine;
-        engine.addImageProvider("thumbnail", new ThumbnailProvider);
-        engine.rootContext()->setContextProperty("files", &files);
-        QQmlComponent component(&engine, QUrl("qrc:/qml/SpatialPreview.qml"));
-        QScopedPointer<QObject> preview(component.create());
-        QVERIFY2(preview, qPrintable(component.errorString()));
-        QVERIFY(!preview->property("visible").toBool());
-        files.setSelected(0); QTRY_VERIFY(preview->property("visible").toBool());
-        preview->setProperty("dismissed", true); QVERIFY(!preview->property("visible").toBool());
-        QVERIFY(QMetaObject::invokeMethod(preview.data(), "reopen"));
-        QVERIFY(preview->property("visible").toBool());
-        files.setSelected(-1); QVERIFY(!preview->property("visible").toBool());
-    }
     void xrComponentCompiles() {
         qmlRegisterType<HandGesture>("Fsv", 1, 0, "HandGesture");
         QQmlEngine engine;

@@ -38,9 +38,7 @@ Node {
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
-                generateMipmaps: true
                 minFilter: Texture.Linear
-                mipFilter: Texture.Linear
             }
             cullMode: Material.NoCulling
         }
