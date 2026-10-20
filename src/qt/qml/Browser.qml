@@ -193,8 +193,8 @@ ThemedPanel {
                         clickPreview.selectedPath = files.selection.path || ""
                         clickPreview.restart()
                     }
-                    // A short MMB click enables scroll-button zoom, usable with DomeD's
-                    // middle/thumb pinch without needing a keyboard modifier.
+                    // A short MMB click enables scroll-button zoom without
+                    // needing to hold a mouse button or keyboard modifier.
                     if (!scrollWasActive && event.button === Qt.MiddleButton && Math.abs(event.x - start.x) + Math.abs(event.y - start.y) < 5) {
                         scrollMode = true
                     }

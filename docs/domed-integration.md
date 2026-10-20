@@ -56,7 +56,9 @@ DomeD currently consumes `wl_shm` buffers. Desktop presentation has an opaque
 scene and inline properties; XR presentation has transparency and spatial popups.
 The realm remains fixed for that application instance across headset reconnects.
 `--desktop` overrides presentation. `--domed` explicitly enables the bridge while
-keeping the socket's realm; `--xr` explicitly starts standalone OpenXR.
+keeping the socket's realm. Both realms use mouse and keyboard input exclusively,
+with no fsvr hand or eye controls. `--xr` is rejected inside DomeD; standalone
+OpenXR is available outside DomeD.
 
 ## File-manager requests
 

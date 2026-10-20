@@ -90,7 +90,7 @@ void DomeWindow::showPreview(const QPointF &anchor)
     if (selection.isEmpty() || m_files->busy()) return;
     if (m_preview) delete m_preview.data();
     // Qt::Popup creates a real xdg_popup with an attachment point on the owning
-    // raster Wayland surface. DomeD supplies placement, beams and hand routing.
+    // raster Wayland surface. DomeD supplies placement and mouse/keyboard input.
     // A FileManager1 request can arrive before this window has an input serial.
     // Qt's non-grabbing tooltip role still creates an xdg_popup in that case.
     auto *panel = new PreviewPanel(this, m_haveInput);

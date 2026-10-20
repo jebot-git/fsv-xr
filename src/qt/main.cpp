@@ -48,6 +48,9 @@ int main(int argc, char **argv)
     if (xr && (parser.isSet("domed") || parser.isSet("desktop"))) {
         qCritical("--xr cannot be combined with --domed or --desktop."); return 2;
     }
+    if (xr && domeEnvironment) {
+        qCritical("--xr is unavailable inside DomeD. Launch fsvr without --xr to use DomeD's mouse and keyboard controls."); return 2;
+    }
     const bool domed = parser.isSet("domed") || (!xr
         && QGuiApplication::platformName().startsWith("wayland") && domeEnvironment);
     // Desktop-specific Quick styles (e.g. Kirigami) can ignore application
@@ -60,7 +63,6 @@ int main(int argc, char **argv)
 #if !FSV_HAS_XR
     if (xr) { qCritical("Built without Qt Quick 3D XR; rebuild with FSV_XR enabled."); return 2; }
 #endif
-    qmlRegisterType<HandGesture>("Fsv", 1, 0, "HandGesture");
     qmlRegisterType<BranchGeometry>("Fsv", 1, 0, "BranchGeometry");
     FileSystem files;
     Appearance appearance(domed || xr);
@@ -78,11 +80,14 @@ int main(int argc, char **argv)
         if (parser.isSet("smoke-test")) QTimer::singleShot(3000, &app, &QCoreApplication::quit);
         return app.exec();
     }
+    // Hand input belongs exclusively to the standalone OpenXR scene. DomeD
+    // renders Browser.qml and receives only the compositor's Wayland seat input.
+    if (xr) qmlRegisterType<HandGesture>("Fsv", 1, 0, "HandGesture");
     QQmlApplicationEngine engine;
     engine.addImageProvider("thumbnail", new ThumbnailProvider);
     engine.rootContext()->setContextProperty("appearance", &appearance);
     engine.rootContext()->setContextProperty("files", &files);
-    engine.rootContext()->setContextProperty("xrMode", xr || domed);
+    engine.rootContext()->setContextProperty("xrMode", xr);
     engine.rootContext()->setContextProperty("domeMode", domed);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
     engine.load(QUrl(xr ? "qrc:/qml/Xr.qml" : "qrc:/qml/Main.qml"));

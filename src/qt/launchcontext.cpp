@@ -32,9 +32,12 @@ LaunchContext LaunchContext::detect()
     auto identify = [](int fd) -> LaunchContext {
         ucred peer{};
         socklen_t length = sizeof(peer);
-        if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &length) != 0 || peer.uid != getuid()
-            || QFileInfo(QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(peer.pid))).fileName()
-                != QStringLiteral("dome-compositor")) return {};
+        if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &length) != 0 || peer.uid != getuid()) return {};
+        QString executable = QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(peer.pid));
+        // Linux appends this marker when an upgrade replaces the running
+        // compositor binary. Its sockets and session records remain valid.
+        if (executable.endsWith(QStringLiteral(" (deleted)"))) executable.chop(10);
+        if (QFileInfo(executable).fileName() != QStringLiteral("dome-compositor")) return {};
         // getpeername works for inherited WAYLAND_SOCKET FDs too. Environment
         // hints and headset availability cannot identify the launch realm.
         sockaddr_un address{};

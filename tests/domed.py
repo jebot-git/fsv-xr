@@ -82,15 +82,34 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         with urllib.request.urlopen(request, timeout=2) as response:
             assert response.status == 200
     try:
+        # Exercise an upgraded session too: Linux marks an unlinked running
+        # executable as "(deleted)" in /proc, but it is still the same compositor.
+        running_compositor = Path(runtime) / "dome-compositor"
+        shutil.copy2(compositor, running_compositor)
         with (out / "compositor.log").open("w") as log:
-            dome = subprocess.Popen([compositor], env=env, stdout=log, stderr=log)
+            dome = subprocess.Popen([str(running_compositor)], env=env, stdout=log, stderr=log)
         def socket_name():
             assert dome.poll() is None, "DomeD exited; see compositor.log"
             match = re.search(r"Dome Wayland socket: (\S+)", (out / "compositor.log").read_text())
             return match[1] if match else None
         desktop_name = wait(socket_name)
         name = wait(lambda: (m[1] if (m := re.search(r"Dome XR Wayland socket: (\S+)", (out / "compositor.log").read_text())) else None))
+        running_compositor.unlink()
         client_env = {**env, "WAYLAND_DISPLAY": name, "QT_QPA_PLATFORM": "wayland", "QT_FORCE_STDERR_LOGGING": "1", "WAYLAND_DEBUG": "1"}
+        # Neither named realm nor an inherited socket may bypass DomeD's
+        # mouse/keyboard-only path by requesting standalone hand controls.
+        for realm_socket in (desktop_name, name):
+            result = subprocess.run([executable, "--xr", "--smoke-test"],
+                                    env={**client_env, "WAYLAND_DISPLAY": realm_socket},
+                                    capture_output=True, text=True, timeout=10)
+            assert result.returncode == 2 and "--xr is unavailable inside DomeD" in result.stderr, result.stderr
+        with socket.socket(socket.AF_UNIX) as inherited:
+            inherited.connect(str(Path(runtime) / name))
+            inherited_env = {**client_env, "WAYLAND_SOCKET": str(inherited.fileno())}
+            inherited_env.pop("WAYLAND_DISPLAY", None)
+            result = subprocess.run([executable, "--xr", "--smoke-test"], env=inherited_env,
+                                    pass_fds=(inherited.fileno(),), capture_output=True, text=True, timeout=10)
+            assert result.returncode == 2 and "--xr is unavailable inside DomeD" in result.stderr, result.stderr
         with (out / "client.log").open("w") as log:
             # Match application-menu launch: detect DomeD without --domed.
             client = subprocess.Popen([executable, str(fixtures)], env=client_env, stdout=log, stderr=log)
@@ -126,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         x, y = places_width + (before.width - places_width - inspector_width) / 2, before.height * .56
         uv = [x / before.width, y / before.height]
         def click(button):
-            # Send a hover frame first, as a tracked hand does before pinching.
+            # Send pointer motion before clicking.
             # It also releases any stale pointer grab after a popup unmaps.
             packet([{"kind": "motion", "id": wid, "uv": uv}], [{"op": "focus", "id": wid}])
             time.sleep(.08)
@@ -411,7 +430,7 @@ with tempfile.TemporaryDirectory(prefix="fsv-dome-") as runtime:
         close_window()
         heartbeat_stop.set(); pulse.join(timeout=2)
         xd.close()
-        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup hand input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore, desktop/XR named and FD launch realms, MIME defaults, FileManager1 reveal/properties, Super+E, physical XR LMB/RMB/MMB/wheel/scroll-button/double-click and cleanup")
+        print("PASS: Vulkan/DomeD capture; selected-file xdg_popup, separate preview texture, popup pointer input, reopening, dismissal, live light/dark theme, RMB context anchors, nested menus, keyboard Properties/Escape, oversized menu arrows/wheel/scrolled action targeting, MMB drag, internal Trash preview/context Restore, desktop/XR named and FD launch realms, MIME defaults, FileManager1 reveal/properties, Super+E, physical XR LMB/RMB/MMB/wheel/scroll-button/double-click and cleanup")
     finally:
         heartbeat_stop.set()
         if dome is not None and dome.poll() is None:

@@ -193,9 +193,10 @@ space for their names below their children.
 ## DomeD
 
 Launch against the **socket printed by your DomeD compositor**, using the same
-`XDG_RUNTIME_DIR`. DomeD owns the OpenXR session and hand tracking in this mode;
-fsvr consumes its normal Wayland seat input and never opens a second XR
-session. The companion integration and deployment steps are in
+`XDG_RUNTIME_DIR`. DomeD owns the OpenXR session in this mode. fsvr uses mouse
+and keyboard input exclusively through the normal Wayland seat; it does not
+create hand or eye controls or open a second XR session. The companion
+integration and deployment steps are in
 [docs/domed-integration.md](docs/domed-integration.md).
 
 The compositor publishes a versioned `<wayland-socket>.dome-session.json` record
@@ -205,7 +206,8 @@ DomeD desktop launches retain an opaque desktop view and inline properties;
 XR launches use spatial presentation. A missing/invalid record falls back to
 desktop presentation. Headset presence alone never selects XR.
 `--desktop` explicitly requests desktop presentation while retaining DomeD's
-Wayland bridge when needed; `--xr` explicitly starts standalone OpenXR.
+Wayland bridge when needed. `--xr` starts standalone OpenXR only outside DomeD;
+inside DomeD it is rejected with instructions to use the ordinary launch.
 XR views have a transparent background and omit the desktop base plate. DomeD's
 Wayland surface preserves alpha; controls and Places retain their themed panels.
 Standalone OpenXR requests passthrough where supported by the active runtime.
@@ -214,10 +216,10 @@ Standalone OpenXR requests passthrough where supported by the active runtime.
 QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-N ./build/fsvr --domed /path
 ```
 
-DomeD maps index/thumb to LMB, middle/thumb to MMB, and ring/thumb to RMB. These
-provide selection, dragging, scroll-button zoom, and the context menu with no
-keyboard modifier. DomeD's grips and two-hand gestures continue to manipulate the
-application's window/panel as defined by DomeD.
+Use LMB to select files, double-click to open them, RMB for actions, MMB drag
+to pan, and the wheel to zoom. A short MMB click enables scroll-button zoom;
+move up/down to zoom and click or press Escape to stop. Drag the background or
+use arrow keys to tilt the view. DomeD owns window/panel placement.
 
 DomeD's current compositor does not provide the presentation support required by
 this client's native Vulkan swapchain. Both DomeD launch realms therefore render the same Qt
@@ -233,16 +235,16 @@ normal window/lane slot. Single-click previews wait for the system double-click
 interval so a mouse double-click can open a folder. Programmatic Properties
 requests before any input use a non-grabbing `xdg_popup`. DomeD controls placement: in room-dome view it raises the
 panel above its owning window and draws a beam to the file attachment point;
-direct view aligns it with the attachment point. The preview supports hand-pointer
+direct view aligns it with the attachment point. The preview supports mouse and keyboard
 input, Open, Close, Escape and outside-click dismissal. Refreshing, navigating or
 changing selection closes stale previews. Selecting a dismissed file reopens it.
 
-RMB (including DomeD's ring/thumb pinch) opens a native Wayland context menu.
+RMB opens a native Wayland context menu.
 DomeD associates it with the exact click point, places its bottom centre 8 logical
 pixels above that point, and applies its direct-view/dome depth, beam, work-area
 clamping and bounded scroll-viewport policies. RMB on the preview opens a child
 menu attached to that preview. Qt handles native menu keyboard navigation and
-Escape; DomeD routes hand input and owns oversized-menu arrow/wheel scrolling.
+Escape; DomeD routes mouse input and owns oversized-menu arrow/wheel scrolling.
 fsvr exports the full menu buffer to avoid nesting Qt's screen-height scroller
 inside DomeD's viewport. Properties reopens the file preview. File operations and confirmation dialogs use
 the same backend as the desktop UI.
