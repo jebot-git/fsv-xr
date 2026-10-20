@@ -336,6 +336,8 @@ private slots:
         auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
         files.navigate(temp.path()); QTRY_VERIFY(!files.busy());
         QVERIFY(QTest::qWaitForWindowExposed(window)); QTest::qWait(500);
+        window->requestActivate();
+        QVERIFY(QTest::qWaitForWindowActive(window));
         QCOMPARE(window->rendererInterface()->graphicsApi(), QSGRendererInterface::Vulkan);
         auto view = window->findChild<QQuickItem *>("filesystemView"); QVERIFY(view);
         QVector3D point;
