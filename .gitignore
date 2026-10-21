@@ -48,3 +48,7 @@ builddir
 /fsvr-tree-preview.png
 
 __pycache__/
+
+# Isolated FLTK experiment build outputs
+/build-fltk/
+/fltk-*.log

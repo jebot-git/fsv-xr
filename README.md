@@ -1,3 +1,5 @@
+> This experimental branch defaults to FLTK 1.4.5. See [FLTK_EXPERIMENT.md](FLTK_EXPERIMENT.md) for build instructions and missing features.
+
 # fsvr
 
 Previously named fsv-xr.
