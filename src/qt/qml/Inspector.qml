@@ -25,31 +25,31 @@ Rectangle {
             id: column
             width: parent.width
             spacing: 10
-            Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "FILE INSPECTOR"; color: Theme.muted; font.pixelSize: 12; font.letterSpacing: 2 }
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: "FILE INSPECTOR"; color: Theme.muted; }
             Image {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(170, panel.height * .3)
                 visible: files.selected >= 0
-                source: files.selection.thumbnail || ""
+                source: files.selection.thumbnail ? files.selection.thumbnail + "/font/" + Theme.font.family + "-" + Theme.font.styleName + "-" + Theme.font.pixelSize : ""
                 sourceSize: Qt.size(512, 512)
                 asynchronous: true
                 fillMode: Image.PreserveAspectFit
             }
-            Label { palette: Theme.controlPalette(Theme.paletteRevision);
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision);
                 text: files.selection.name || "Select a file"
                 Layout.fillWidth: true; wrapMode: Text.WrapAnywhere
-                font.pixelSize: 20; font.bold: true; color: Theme.text
+                  color: Theme.text
             }
-            Label { palette: Theme.controlPalette(Theme.paletteRevision);
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision);
                 text: files.selected < 0 ? "Explore the directory in three dimensions." :
                     (files.selection.mime + "\n" + (files.inTrash && files.selection.directory ? "Folder" : Number(files.selection.bytes).toLocaleString() + " bytes") + "\n" +
                      "Modified: " + (files.selection.modified || "Unknown") + (files.inArchive ? "" : "\nOwner: " + files.selection.owner) +
                      (files.selection.symlink ? (files.inArchive ? "\nLink or special file (opening disabled)" : "\nSymbolic link") : ""))
                 Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.text
             }
-            Label { palette: Theme.controlPalette(Theme.paletteRevision);
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision);
                 text: files.inTrash && files.selected >= 0 ? "Original location: " + (files.selection.originalPath || "Unavailable — cannot restore automatically") + "\nDeleted: " + (files.selection.deleted || "Unknown") : files.selection.path || files.root
-                Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.muted; font.pixelSize: 11
+                Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: Theme.muted;
             }
         }
     }
@@ -57,7 +57,7 @@ Rectangle {
         id: buttons
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 12 }
         spacing: 8
-        Button {
+        Button { font: Theme.font;
             palette: Theme.controlPalette(Theme.paletteRevision)
             objectName: "inspectorOpen"
             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1
@@ -66,7 +66,7 @@ Rectangle {
             enabled: files.selected >= 0 && !!files.selection.canOpen && !files.busy && (!files.inTrash || files.selection.canRestore)
             onClicked: files.open(files.selected)
         }
-        Button {
+        Button { font: Theme.font;
             palette: Theme.controlPalette(Theme.paletteRevision)
             objectName: "inspectorActions"
             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1

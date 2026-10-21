@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 import QtQuick
 import QtQuick.Controls
-ApplicationWindow { palette: Theme.controlPalette(Theme.paletteRevision);
+ApplicationWindow { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision);
     width: 1280; height: 820
     visible: true
     title: "fsvr — " + files.root

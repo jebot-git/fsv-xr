@@ -37,7 +37,7 @@ ThemedPanel {
             Repeater {
                 id: repeater
                 model: files.tabs
-                delegate: Button {
+                delegate: Button { font: Theme.font;
                     required property var modelData
                     required property int index
                     objectName: "directoryTab" + index
@@ -51,14 +51,14 @@ ThemedPanel {
                     ToolTip.text: modelData.path
                     ToolTip.delay: 700
                     contentItem: RowLayout {
-                        Label {
+                        Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering;
                             text: modelData.title
                             textFormat: Text.PlainText
                             color: files.currentTab === index ? Theme.colors.highlightedText : Theme.text
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
-                        ToolButton {
+                        ToolButton { font: Theme.font;
                             objectName: "closeTab" + index
                             palette: Theme.controlPalette(Theme.paletteRevision)
                             text: "×"
@@ -79,7 +79,7 @@ ThemedPanel {
         }
         ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
     }
-    ToolButton {
+    ToolButton { font: Theme.font;
         id: add
         objectName: "newTabButton"
         palette: Theme.controlPalette(Theme.paletteRevision)

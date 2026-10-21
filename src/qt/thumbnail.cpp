@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "thumbnail.h"
 #include "archives.h"
+#include <QGuiApplication>
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QDir>
@@ -135,7 +136,9 @@ QImage ThumbnailProvider::requestImage(const QString &id, QSize *size, const QSi
         result.fill(info.isDir() ? QColor("#355a78") : QColor("#223345"));
         QPainter painter(&result);
         painter.setPen(QColor("#e6edf3"));
-        QFont font; font.setPixelSize(qMax(10, target.width() / 18)); painter.setFont(font);
+        QFont font = QGuiApplication::font();
+        if (!qGuiApp->property("domeBitmapAppearance").toBool()) font.setPixelSize(qMax(10, target.width() / 18));
+        painter.setFont(font);
         QString text = info.isDir() ? "DIRECTORY" : mime + "\n\n" + displayName;
         if (!path.isEmpty() && (mime.startsWith("text/") || mime == "application/json" || mime.endsWith("+xml"))) {
             QFile file(path);

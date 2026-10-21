@@ -100,23 +100,23 @@ XrView {
             Keys.onDownPressed: view.pitch = Math.min(45, view.pitch + 5)
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr · OpenXR / Vulkan"; color: Theme.text; font.pixelSize: 18 }
+                Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr · OpenXR / Vulkan"; color: Theme.text; }
                 Tabs { Layout.fillWidth: true; Layout.preferredHeight: 40 }
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: files.root; color: Theme.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+                Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: files.root; color: Theme.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
                 RowLayout {
-                    Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Up"; enabled: !files.operating; onClicked: files.up() }
-                    Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Refresh"; enabled: !files.operating; onClicked: files.refresh() }
-                    ComboBox { palette: Theme.controlPalette(Theme.paletteRevision); model: ["map", "tree", "disc"]; currentIndex: ["map", "tree", "disc"].indexOf(files.layout); onActivated: files.layout = currentText }
+                    Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Up"; enabled: !files.operating; onClicked: files.up() }
+                    Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Refresh"; enabled: !files.operating; onClicked: files.refresh() }
+                    ComboBox { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); model: ["map", "tree", "disc"]; currentIndex: ["map", "tree", "disc"].indexOf(files.layout); onActivated: files.layout = currentText }
                 }
-                Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: controls.confirmEmptyTrash() }
+                Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: controls.confirmEmptyTrash() }
                 Inspector { id: inspector; Layout.fillWidth: true; Layout.fillHeight: true; onRequestAction: controls.show(8, 40) }
                 RowLayout {
-                    Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "− Zoom"; onClicked: view.changeZoom(-Math.log(1.2)) }
-                    Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "+ Zoom"; onClicked: view.changeZoom(Math.log(1.2)) }
-                    Button { palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset"; onClicked: { view.zoom = .65; view.panX = 0; view.panY = 0; view.panZ = 0; view.yaw = 0; view.pitch = 0 } }
+                    Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "− Zoom"; onClicked: view.changeZoom(-Math.log(1.2)) }
+                    Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "+ Zoom"; onClicked: view.changeZoom(Math.log(1.2)) }
+                    Button { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset"; onClicked: { view.zoom = .65; view.panX = 0; view.panY = 0; view.panZ = 0; view.yaw = 0; view.pitch = 0 } }
                 }
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "Index pinch: select / click\nMiddle pinch + move: drag view\nTwo middle pinches: scale\nRing pinch: actions"; color: Theme.muted }
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: files.warning; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: Theme.text; font.pixelSize: 10 }
+                Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: "Index pinch: select / click\nMiddle pinch + move: drag view\nTwo middle pinches: scale\nRing pinch: actions"; color: Theme.muted }
+                Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: files.warning; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: Theme.text; }
             }
             FileActions { id: controls; anchors.fill: parent; onInspectorRequested: inspector.reveal() }
         }

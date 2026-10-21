@@ -56,7 +56,7 @@ int main(int argc, char **argv)
     // Desktop-specific Quick styles (e.g. Kirigami) can ignore application
     // palettes and continue using the host desktop's colours. Fusion honours
     // DomeD's explicit palette and updates it live.
-    if (xr || domed) QQuickStyle::setStyle("Fusion");
+    if (domed) QQuickStyle::setStyle("Fusion");
     if (domed && !QGuiApplication::platformName().startsWith("wayland")) {
         qCritical("--domed needs QT_QPA_PLATFORM=wayland and DomeD's WAYLAND_DISPLAY."); return 2;
     }
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
 #endif
     qmlRegisterType<BranchGeometry>("Fsv", 1, 0, "BranchGeometry");
     FileSystem files;
-    Appearance appearance(domed || xr);
+    Appearance appearance(domed);
     auto openLocations = [&] {
         auto locations = parser.positionalArguments();
         if (locations.isEmpty()) locations << QDir::homePath();

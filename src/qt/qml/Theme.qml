@@ -3,6 +3,8 @@ pragma Singleton
 import QtQuick
 QtObject {
     id: theme
+    readonly property bool dome: typeof appearance !== "undefined" && appearance.dome
+    readonly property font font: typeof appearance !== "undefined" ? appearance.font : Qt.application.font
     property int paletteRevision: 0
     function advancePalette() { paletteRevision++ }
     // Controls copy a Palette on assignment. Reassign after its role bindings

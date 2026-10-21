@@ -343,3 +343,12 @@ Part of the [de-xr desktop](https://github.com/topics/de-xr):
 [LightXR](https://github.com/jebot-git/LightXR) the optional login manager.
 Each application has its own dependencies and can be used independently where
 its selected backend permits.
+
+### DomeD bitmap fonts
+
+In a DomeD session, controls, menus, inspector text and scene labels bind to the
+selected bitmap font's family, style and native pixel size. Changes to DomeD's
+appearance file update existing Qt Quick text and text previews; fixed heading
+sizes no longer override the bitmap strike. An unavailable bitmap face or strike
+falls back to the Qt application font. Outside DomeD, including standalone XR,
+the interface uses normal Qt font and palette settings.

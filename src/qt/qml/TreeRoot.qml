@@ -24,13 +24,13 @@ Node {
                     width: Math.max(1, 512 * platform.extent.x / Math.max(platform.extent.x, platform.extent.z))
                     height: Math.max(1, 512 * platform.extent.z / Math.max(platform.extent.x, platform.extent.z))
                     color: "#dba43a"
-                    Text {
+                    Text { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering;
                         anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 6 }
                         height: parent.height * .28 - 12
                         text: files.treeRoot.name ?? ""
                         textFormat: Text.PlainText
                         color: "#231a08"
-                        font.pixelSize: Math.max(12, Math.min(48, height - 4))
+
                         maximumLineCount: 2
                         wrapMode: Text.WrapAnywhere
                         elide: Text.ElideRight

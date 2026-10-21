@@ -109,7 +109,7 @@ Node {
                                 objectName: "objectThumbnail" + entry.index
                                 anchors { top: parent.top; left: parent.left; right: parent.right; bottom: filenameBand.top }
                                 sourceSize: Qt.size(Math.min(256, entry.textureSize), Math.min(256, entry.textureSize))
-                                source: entry.isDirectory ? "" : entry.thumbnail
+                                source: entry.isDirectory ? "" : entry.thumbnail + "/font/" + Theme.font.family + "-" + Theme.font.styleName + "-" + Theme.font.pixelSize
                                 asynchronous: true
                                 fillMode: Image.PreserveAspectFit
                             }
@@ -121,14 +121,14 @@ Node {
                                 height: entry.isDirectory ? parent.height * .28
                                     : Math.min(parent.height * .5, Math.max(64, parent.height * .28))
                                 color: entry.isDirectory ? entry.tint : Theme.colors.base
-                                Text {
+                                Text { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering;
                                     objectName: "objectFilename" + entry.index
                                     anchors.fill: parent
                                     anchors.margins: 6
                                     text: entry.fileName
                                     textFormat: Text.PlainText
                                     color: entry.isDirectory ? "#231a08" : Theme.colors.text
-                                    font.pixelSize: Math.max(12, Math.min(48, height - 4))
+
                                     wrapMode: Text.WrapAnywhere
                                     maximumLineCount: 2
                                     elide: Text.ElideMiddle

@@ -86,11 +86,11 @@ ThemedPanel {
             columnSpacing: 6; rowSpacing: 4
             RowLayout {
                 spacing: 4
-                Label { palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr"; font.bold: true; font.pixelSize: 22 }
-                ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
-                ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
+                Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision); text: "fsvr"; }
+                ToolButton { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "↑ Up"; enabled: !files.operating; onClicked: files.up() }
+                ToolButton { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "↻"; enabled: !files.operating; onClicked: files.refresh() }
             }
-            TextField {
+            TextField { font: Theme.font;
                 id: location
                 objectName: "locationField"
                 palette: Theme.controlPalette(Theme.paletteRevision)
@@ -98,15 +98,15 @@ ThemedPanel {
                 Layout.columnSpan: parent.compact ? 2 : 1
                 text: files.root; onAccepted: files.navigate(text)
             }
-            ComboBox {
+            ComboBox { font: Theme.font;
                 palette: Theme.controlPalette(Theme.paletteRevision)
                 Layout.preferredWidth: 120
                 model: ["Map", "Tree", "Disc"]
                 currentIndex: ["map", "tree", "disc"].indexOf(files.layout)
                 onActivated: files.layout = ["map", "tree", "disc"][currentIndex]
             }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset View"; onClicked: window.resetView() }
-            ToolButton { palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
+            ToolButton { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Reset View"; onClicked: window.resetView() }
+            ToolButton { font: Theme.font; palette: Theme.controlPalette(Theme.paletteRevision); text: "Empty Trash…"; visible: files.inTrash; enabled: !files.busy; onClicked: actions.confirmEmptyTrash() }
         }
     }
     Tabs {
@@ -244,7 +244,7 @@ ThemedPanel {
                     visible: fileDrop.containsDrag
                     color: "transparent"
                     border.width: 2; border.color: Theme.colors.highlight
-                    Label {
+                    Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering;
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top; anchors.topMargin: 12
                         text: "Drop into " + fileDrop.directory
@@ -252,12 +252,12 @@ ThemedPanel {
                     }
                 }
             }
-            Label { palette: Theme.controlPalette(Theme.paletteRevision);
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision);
                 anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 16
                 text: files.busy ? files.cached ? "Refreshing cached view…" : "Loading…" : mouse.scrollMode ? "Scroll zoom active · move up/down · click or Escape to stop" : "LMB select / drag files · drag background or arrow keys to tilt · RMB actions · MMB pan / scroll-zoom"
                 width: Math.max(0, parent.width - 32)
                 wrapMode: Text.WordWrap
-                color: Theme.muted; font.pixelSize: 11
+                color: Theme.muted;
             }
             BusyIndicator { anchors.centerIn: parent; running: files.busy }
         }
@@ -271,7 +271,7 @@ ThemedPanel {
             }
         }
     }
-    Label { palette: Theme.controlPalette(Theme.paletteRevision);
+    Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering; palette: Theme.controlPalette(Theme.paletteRevision);
         id: status
         objectName: "statusBar"
         height: visible ? implicitHeight : 0

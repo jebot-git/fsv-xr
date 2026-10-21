@@ -75,3 +75,11 @@ if(BUILD_TESTING)
 endif()
 
 install(FILES docs/man/fsvr.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+if(BUILD_TESTING)
+  add_executable(fsv-font-tests tests/domeappearance-test.cpp src/qt/appearance.cpp src/qt/appearance.h src/qt/resources.qrc)
+  target_include_directories(fsv-font-tests PRIVATE src/qt)
+  target_compile_definitions(fsv-font-tests PRIVATE DOME_FONT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fonts/cozette.otb")
+  target_link_libraries(fsv-font-tests PRIVATE Qt6::Widgets Qt6::Test Qt6::Qml Qt6::QuickControls2)
+  add_test(NAME bitmap-font-appearance COMMAND fsv-font-tests -platform offscreen)
+endif()

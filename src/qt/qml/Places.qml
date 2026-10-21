@@ -26,11 +26,11 @@ ThemedPanel {
             required property var modelData
             required property int index
             width: list.width
-            Label {
+            Label { font: Theme.font; renderType: Theme.dome ? Text.NativeRendering : Text.QtRendering;
                 palette: Theme.controlPalette(Theme.paletteRevision)
                 text: modelData.group
                 color: Theme.muted
-                font.bold: true
+
                 leftPadding: 12; topPadding: 14; bottomPadding: 6
                 visible: index === 0 || files.places[index - 1].group !== modelData.group
                 height: visible ? implicitHeight : 0

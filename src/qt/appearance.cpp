@@ -11,10 +11,11 @@
 #include <QTimer>
 #include <cmath>
 
-Appearance::Appearance(bool dome, QObject *parent) : QObject(parent), m_original(QApplication::palette())
+Appearance::Appearance(bool dome, QObject *parent) : QObject(parent), m_fonts(dome, this), m_original(QApplication::palette())
 {
     m_scene = m_original.color(QPalette::Base);
     m_panel = m_original.color(QPalette::Window);
+    m_fonts.changed = [this] { emit changed(); };
     if (!dome) return;
     m_path = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/dome/appearance.json";
     auto *timer = new QTimer(this); timer->setSingleShot(true); timer->setInterval(30);
