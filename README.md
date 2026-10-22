@@ -1,15 +1,93 @@
-> This experimental branch defaults to FLTK 1.4.5. See [FLTK_EXPERIMENT.md](FLTK_EXPERIMENT.md) for build instructions and missing features.
-
 # fsvr
+
+Filesystem browser for the de-xr desktop. **CMake defaults to the FLTK 1.4.5
+OpenGL frontend** in `fltk/`. The Qt6/Vulkan frontend remains an explicit CMake
+opt-in; the Meson build builds that Qt frontend only. These are separate frontends
+with different controls, options and feature coverage.
+
+## Default FLTK build and installation
+
+Requires C++17, CMake 3.21+, the de-xr patched FLTK **1.4.5** shared libraries,
+OpenGL, libarchive, Fontconfig, GIO, Wayland/X11 development libraries and
+`wayland-scanner`. Tests additionally use FreeType. FLTK patches supply native
+bitmap strikes, DomeD app IDs/menus and Wayland dialog fixes; an arbitrary system
+FLTK package is not a tested substitute. See [FLTK notes](FLTK_EXPERIMENT.md).
+
+```sh
+FLTK_PREFIX=/path/to/patched-fltk-1.4.5
+cmake -S . -B build-fltk -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$FLTK_PREFIX" -DDE_XR_TOOLKIT=FLTK
+cmake --build build-fltk --parallel
+ctest --test-dir build-fltk --output-on-failure
+LD_LIBRARY_PATH="$FLTK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  ./build-fltk/fltk/fsvr --layout tree "$HOME"
+DESTDIR="$PWD/stage" cmake --install build-fltk --prefix /usr/local
+install -Dm644 docs/man/fsvr.1 stage/usr/local/share/man/man1/fsvr.1
+```
+
+Build and stage as your regular user. Review the staged tree before installing
+system files with administrator privileges. The FLTK CMake target currently
+installs the executable only; stage its manual explicitly as above. Supply the
+matching FLTK runtime through your deployment wrapper or library search path.
+The Qt desktop entries and `fsvr-dome-default` helper belong to the opt-in Qt
+installation and are not installed by this FLTK target.
+
+## FLTK browsing, controls and configuration
+
+Open one directory or archive with `fsvr /path`; if several path operands are
+provided, the last selects the initial location. Use the UI to open further tabs.
+`--layout map|tree|disc` selects MapV, TreeV or DiscV. `--version` prints build
+identity without opening a window. `--smoke-test OUTPUT.png` renders a diagnostic
+capture and exits; it is not a duration option. This frontend has no CLI help
+page or Qt `--select`, `--properties`, `--desktop` or `--domed` routing flags.
+
+The browser offers tabs and navigation history, a list and native OpenGL spatial
+scene, ray picking, previews/inspector, asynchronous file operations and archive
+browsing/extraction/compression. Native scans default to a depth cap of three
+and 8,192 entries; displayed sizes describe the scanned subset. View → Sort by also appears in folder context
+menus: natural Name, Size, Modified, Type, Created, Accessed and Extension;
+ascending/descending, folders first and case-sensitive names. Ordering applies
+to sibling groups in all three layouts and retains selection. Unknown dates
+stay last; creation dates depend on `statx` availability. Sorting is saved in
+`$XDG_CONFIG_HOME/fsvr/fltk.json` (normally `~/.config/fsvr/fltk.json`).
+
+| Input | FLTK action |
+| --- | --- |
+| Left click / double click | Select / open |
+| Right drag / right click | Orbit scene / actions |
+| Middle drag or Shift+left drag | Pan scene |
+| Wheel | Zoom |
+| 1 / 2 / 3; F6 | MapV / TreeV / DiscV; toggle spatial view |
+| Ctrl+T / Ctrl+W / Ctrl+Enter | New tab / close tab / open in new tab |
+| Alt+Left / Alt+Right / Alt+Up | Back / forward / parent |
+| F2 / Delete / Alt+Enter | Rename / move to Trash / properties |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste |
+| Ctrl+Shift+N / F5 | New folder / refresh |
+
+Launch normally from DomeD's XR application launcher for its GPU Wayland/XR
+surface and mouse/keyboard seat. DomeD owns the headset session. FLTK exports
+application menus over DBusMenu/KDE AppMenu where the compositor supports them;
+DomeD's appearance and bitmap font changes apply live. `--xr` and `--openxr`
+explicitly fail because standalone OpenXR hands/controllers have not been ported.
+Trash restore/empty, Places and cross-application drag/drop do not yet have the
+Qt frontend's complete UI. Bitmap shaping/bidi, glyph fallback, accessibility/IME
+and broad fractional-scale coverage remain incomplete. Simulated HMD tests do
+not establish physical headset or WiVRn streaming behavior.
+
+## Opt-in Qt6 frontend
+
+**The remainder of this guide describes the Qt frontend only.** Use a separate
+build directory and `-DDE_XR_TOOLKIT=Qt6`; its Vulkan, standalone XR, Places/Trash,
+archive URL and drag/drop behavior must not be assumed for the FLTK executable.
 
 Previously named fsv-xr.
 
-A Qt6 filesystem visualizer rendered with Vulkan, forked from
-[fsv](http://fsv.sourceforge.net/) by Daniel Richard G. The active implementation
+The opt-in Qt6 filesystem visualizer is rendered with Vulkan and forked from
+[fsv](http://fsv.sourceforge.net/) by Daniel Richard G. The retained Qt implementation
 is C++ and Qt Quick 3D in `src/qt`; the retired GTK3/OpenGL implementation is
 preserved under `legacy/` and is excluded from both build systems.
 
-## Build
+## Qt build
 
 Requires C++17, CMake 3.21+ (or Meson), Qt 6.8+ Core, GUI, Widgets, QML, Quick,
 Quick Widgets, Quick Controls 2, Quick 3D, Concurrent, libarchive, and a Vulkan driver.
@@ -22,7 +100,7 @@ On Fedora 44:
 ```sh
 sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel \
   qt6-qtdeclarative-devel qt6-qtquick3d-devel vulkan-loader-devel openxr-devel libarchive-devel
-cmake -S . -B build -G Ninja -DFSV_XR=ON
+cmake -S . -B build -G Ninja -DDE_XR_TOOLKIT=Qt6 -DFSV_XR=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/fsvr /path/to/directory
@@ -66,12 +144,12 @@ The renderer explicitly selects Vulkan through Qt's rendering hardware interface
 (RHI). It does not fall back to OpenGL. Vulkan rendering tests need a live display:
 
 ```sh
-cmake -S . -B build -DFSV_DISPLAY_TESTS=ON
+cmake -S . -B build -DDE_XR_TOOLKIT=Qt6 -DFSV_DISPLAY_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-## Explore
+## Qt exploration
 
 The left Places panel follows Dolphin's local bookmarks in
 `$XDG_DATA_HOME/user-places.xbel`, including their names, icons and hidden state.
@@ -205,7 +283,7 @@ their cards along the longer axis. Zoom in for small tiles in dense directories.
 Folders use gold bodies and name bands, distinct from file colours, and reserve
 space for their names below their children.
 
-## DomeD
+## Qt DomeD transport
 
 Launch against the **socket printed by your DomeD compositor**, using the same
 `XDG_RUNTIME_DIR`. DomeD owns the OpenXR session in this mode. fsvr uses mouse
@@ -285,7 +363,7 @@ and folder double-clicks. Its private D-Bus session and synthetic XR heartbeat
 exercise compositor mouse routing without a headset. It does not modify DomeD
 sources, the user's appearance file, or runtime settings.
 
-## Standalone OpenXR
+## Qt standalone OpenXR
 
 ```sh
 XR_RUNTIME_JSON=/path/to/runtime.json ./build/fsvr --xr /path
@@ -303,7 +381,7 @@ pinch rejection, stale-frame/jump cancellation, and neutral rearming after track
 loss protect against unintended clicks. Hand input needs runtime and device
 support; lack of hands does not prevent rendering the scene.
 
-## Validation and limits
+## Qt validation and limits
 
 Core tests cover scan bounds/aggregation/symlink cycles, safe recursive copy,
 collisions, layouts, rename validation, clipboard paste, special-character preview
@@ -317,7 +395,7 @@ still require headset testing. The new layouts approximate the original fsv
 presentations; legacy color configuration, translations, and animation behavior
 have not been ported.
 
-### File drag and drop
+### Qt file drag and drop
 
 Drag a file or folder with the left mouse button into another application, onto
 another folder in the 3D view, or onto a place or directory tab. Dropping on the
@@ -332,7 +410,7 @@ drags require drag-and-drop support in the compositor and receiving application.
 
 ## Command manuals and related projects
 
-Basic manuals: [fsvr.1](docs/man/fsvr.1). After installation, use `man fsvr`.
+Manual: [fsvr.1](docs/man/fsvr.1). Once the manual is installed, use `man fsvr`.
 
 Part of the [de-xr desktop](https://github.com/topics/de-xr):
 [DomeD](https://github.com/jebot-git/DomeD) provides the desktop/session,
@@ -346,7 +424,7 @@ Part of the [de-xr desktop](https://github.com/topics/de-xr):
 Each application has its own dependencies and can be used independently where
 its selected backend permits.
 
-### DomeD bitmap fonts
+### Qt DomeD bitmap fonts
 
 In a DomeD session, controls, menus, inspector text and scene labels bind to the
 selected bitmap font's family, style and native pixel size. Changes to DomeD's
