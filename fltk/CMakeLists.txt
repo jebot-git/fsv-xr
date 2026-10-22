@@ -28,3 +28,22 @@ endif()
 
 include(desktop-menu.cmake)
 de_xr_desktop_menu(fsvr)
+
+if(BUILD_TESTING)
+  add_executable(fsv-interaction-test interaction-test.cpp spatial-view.cpp)
+  target_compile_features(fsv-interaction-test PRIVATE cxx_std_17)
+  target_link_libraries(fsv-interaction-test PRIVATE fsv-native-core fltk::gl-shared OpenGL::GL fltk::fltk-shared fltk::images-shared PkgConfig::FONTCONFIG)
+  de_xr_desktop_menu(fsv-interaction-test)
+  find_program(XVFB_RUN xvfb-run)
+  find_program(DBUS_RUN_SESSION dbus-run-session)
+  if(XVFB_RUN AND DBUS_RUN_SESSION)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    foreach(desktop Dome XFCE)
+      add_test(NAME interaction-${desktop}
+        COMMAND ${CMAKE_COMMAND} -E env FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=${desktop}
+          LIBGL_ALWAYS_SOFTWARE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+          ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-interaction-test>)
+      set_tests_properties(interaction-${desktop} PROPERTIES TIMEOUT 45)
+    endforeach()
+  endif()
+endif()

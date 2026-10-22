@@ -31,6 +31,8 @@ installs the executable only; stage its manual explicitly as above. Supply the
 matching FLTK runtime through your deployment wrapper or library search path.
 The Qt desktop entries and `fsvr-dome-default` helper belong to the opt-in Qt
 installation and are not installed by this FLTK target.
+When Python 3, `xvfb-run` and `dbus-run-session` are available, CTest also checks
+menu export, spatial input and sidebar resizing on a private display and bus.
 
 ## FLTK browsing, controls and configuration
 
@@ -67,6 +69,10 @@ stay last; creation dates depend on `statx` availability. Sorting is saved in
 Launch normally from DomeD's XR application launcher for its GPU Wayland/XR
 surface and mouse/keyboard seat. DomeD owns the headset session. FLTK exports
 application menus over DBusMenu/KDE AppMenu where the compositor supports them;
+DomeD sessions use the universal menu without a duplicate menu bar in the window.
+Keyboard shortcuts remain available. Clicking a folder in the spatial view selects
+it and updates the side list; the resizable sidebar remains separate from the
+viewport when switching views or resizing the window.
 DomeD's appearance and bitmap font changes apply live. `--xr` and `--openxr`
 explicitly fail because standalone OpenXR hands/controllers have not been ported.
 Trash restore/empty, Places and cross-application drag/drop do not yet have the

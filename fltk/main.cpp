@@ -23,14 +23,24 @@
 #include <optional>
 #include <sstream>
 namespace fs = std::filesystem;
+class Sidebar : public Fl_Group {
+public:
+  Fl_Hold_Browser list{8, 80, 250, 470};
+  Fl_Multiline_Output inspector{8, 550, 250, 110};
+  Sidebar() : Fl_Group(8, 80, 250, 580) {
+    end();
+    resizable(list);
+  }
+};
 class Browser : public dx::GpuWindow {
   Fl_Menu_Bar menu{0, 0, 1000, 30};
   Fl_Button upButton{8, 40, 64, 30, "Up"};
   Fl_Input path{82, 40, 560, 30};
   Fl_Choice tabChoice{650, 40, 150, 30}, layoutChoice{810, 40, 180, 30};
   Fl_Tile panels{8, 80, 984, 580};
-  Fl_Hold_Browser list{8, 80, 250, 470};
-  Fl_Multiline_Output inspector{8, 550, 250, 110};
+  Sidebar sidebar;
+  Fl_Hold_Browser &list = sidebar.list;
+  Fl_Multiline_Output &inspector = sidebar.inspector;
   SpatialView spatial{258, 80, 734, 580};
   Fl_Box status{8, 665, 984, 30};
   struct Tab {
@@ -45,6 +55,7 @@ class Browser : public dx::GpuWindow {
   fsv::Scene scene;
   std::vector<int> listed;
   int selected = -1;
+  int sidebarWidth = 250;
   std::string layout = "map", filter;
   fsv::SortOptions sorting;
   std::unique_ptr<DesktopMenu> desktop;
@@ -411,8 +422,6 @@ public:
     xclass("org.fsvxr.fsvr");
     panels.end();
     end();
-    add(spatial);
-    panels.add(spatial);
     add(status);
     list.format_char(0);
     list.callback(
@@ -499,6 +508,16 @@ public:
     inspector.wrap(true);
     resizable(panels);
     panels.resizable(spatial);
+    panels.init_size_range(160, 160);
+    if (dx::dome()) {
+      // Keep the real command tree for DBusMenu and keyboard shortcuts.
+      menu.hide();
+      for (Fl_Widget *widget : std::vector<Fl_Widget *>{
+               &upButton, &path, &tabChoice, &layoutChoice})
+        widget->position(widget->x(), widget->y() - menu.h());
+      panels.resize(panels.x(), panels.y() - menu.h(), panels.w(),
+                    panels.h() + menu.h());
+    }
     size_range(620, 400);
     char name[] = "/tmp/fsvr-fltk-XXXXXX";
     if (auto value = mkdtemp(name))
@@ -518,6 +537,12 @@ public:
       std::error_code ec;
       fs::remove_all(temporary, ec);
     }
+  }
+  int handle(int event) override {
+    if (event == FL_SHORTCUT && !menu.visible() && !Fl::modal() &&
+        menu.handle(event))
+      return 1;
+    return dx::GpuWindow::handle(event);
   }
   void load(fsv::Location target, bool history = true) {
     try {
@@ -652,14 +677,24 @@ public:
       setLayout("disc");
     else if (name == "Spatial view") {
       if (spatial.visible()) {
+        sidebarWidth = sidebar.w();
         spatial.hide();
-        list.resize(8, 80, 984, 470);
-        inspector.resize(8, 550, 984, 110);
+        // A tile considers even hidden children when resizing and hit testing.
+        // Remove the hidden viewport from the tile until it is restored.
+        add(spatial);
+        sidebar.resize(panels.x(), panels.y(), panels.w(), panels.h());
+        panels.resizable(sidebar);
       } else {
-        list.resize(8, 80, 250, 470);
-        inspector.resize(8, 550, 250, 110);
+        panels.add(spatial);
+        int width = std::clamp(sidebarWidth, 160, panels.w() - 160);
+        sidebar.resize(panels.x(), panels.y(), width, panels.h());
+        spatial.resize(panels.x() + width, panels.y(), panels.w() - width,
+                       panels.h());
+        panels.resizable(spatial);
         spatial.show();
       }
+      panels.init_sizes();
+      init_sizes();
       redraw();
     } else if (name == "Properties") {
       if (e)

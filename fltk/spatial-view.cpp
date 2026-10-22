@@ -245,15 +245,16 @@ void SpatialView::draw() {
   glFlush();
 }
 int SpatialView::pickAt(int x, int y) {
-  if (!scene || !context())
+  if (!scene || !context() || x < 0 || y < 0 || x >= w() || y >= h())
     return -1;
   make_current();
   setup();
   double ox, oy, oz, tx, ty, tz;
   double scale = pixels_per_unit();
-  gluUnProject((x - this->x()) * scale, pixel_h() - (y - this->y()) * scale, 0,
+  // FLTK delivers events relative to this GL subwindow, not its parent.
+  gluUnProject(x * scale, pixel_h() - y * scale, 0,
                model, projection, viewport, &ox, &oy, &oz);
-  gluUnProject((x - this->x()) * scale, pixel_h() - (y - this->y()) * scale, 1,
+  gluUnProject(x * scale, pixel_h() - y * scale, 1,
                model, projection, viewport, &tx, &ty, &tz);
   return fsv::pick(*scene, {ox, oy, oz}, {tx - ox, ty - oy, tz - oz});
 }

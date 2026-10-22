@@ -40,6 +40,7 @@ public:
   }
   int selectedIndex() const { return selected; }
   void invalidateLabels();
+  // Coordinates are local FLTK units, as supplied to this subwindow's handle().
   int pickAt(int x, int y);
   void reset() {
     view = {};
