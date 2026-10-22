@@ -1,3 +1,4 @@
+#include "domeappearance.h"
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filesystem.h"
 #include "thumbnail.h"
@@ -27,6 +28,7 @@ int main(int argc, char **argv)
     // Force Vulkan for both desktop RHI and Qt's OpenXR graphics binding.
     qputenv("QSG_RHI_BACKEND", "vulkan");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
+    DomeAppearance::bootstrapFonts();
     QApplication app(argc, argv);
     app.setApplicationName("fsvr");
     app.setApplicationVersion("0.1.0");

@@ -10,7 +10,7 @@
 class AppearanceTest : public QObject {
     Q_OBJECT
 private slots:
-    void liveBitmapAndQtFallback() {
+    void liveBdfAndRejectedOutline() {
         QTemporaryDir config;
         QVERIFY(config.isValid());
         const auto oldConfig = qgetenv("XDG_CONFIG_HOME");
@@ -26,7 +26,7 @@ private slots:
         QDir(config.path()).mkdir("dome");
         const QString path = config.filePath("dome/appearance.json");
         auto save = [&](const QByteArray &data) { QSaveFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(data); QVERIFY(file.commit()); };
-        save(R"({"font":"Cozette / Medium","font_size":13,"light":false})");
+        save(R"({"font":"Ttyp0 / Regular","font_size":13,"light":false})");
         {
             Appearance appearance(true);
             QQmlEngine engine;
@@ -36,35 +36,36 @@ private slots:
             auto qml = std::unique_ptr<QObject>(component.create());
             QVERIFY2(qml != nullptr, qPrintable(component.errorString()));
             auto quickFont = [&] { return qml->property("font").value<QFont>(); };
-            QTRY_COMPARE(QFontInfo(quickFont()).family(), QString("Cozette"));
-            QCOMPARE(quickFont().styleName(), QString("Medium"));
+            QTRY_VERIFY(QFontInfo(quickFont()).family().startsWith("Dome Qt BDF "));
+            QCOMPARE(quickFont().styleName(), QString("Regular"));
             QLabel label("English 日本語 한글");
             label.show();
-            QTRY_COMPARE(QFontInfo(label.font()).family(), QString("Cozette"));
+            QTRY_VERIFY(QFontInfo(label.font()).family().startsWith("Dome Qt BDF "));
             QCOMPARE(QFontInfo(label.font()).pixelSize(), 13);
-            QCOMPARE(label.font().styleName(), QString("Medium"));
-            QVERIFY(!QFontDatabase::isSmoothlyScalable("Cozette","Medium"));
-            // A forged outline choice must fall back to Qt, not be accepted as a bitmap.
+            QCOMPARE(label.font().styleName(), QString("Regular"));
+            QVERIFY(!QFontDatabase::isSmoothlyScalable("Ttyp0","Regular"));
+            // A forged outline choice must preserve the previous valid BDF font.
             save(R"({"font":"Noto Sans / Regular","font_size":13,"light":true})");
-            QTRY_COMPARE(appearance.font(), original);
-            QTRY_COMPARE(quickFont(), original);
-            QTRY_COMPARE(QApplication::palette().color(QPalette::Window), QColor(229,233,239));
-            save(R"({"font":"Cozette / Medium","font_size":13,"light":false})");
-            QTRY_COMPARE(QFontInfo(appearance.font()).family(), QString("Cozette"));
-            // An unavailable fixed strike must not be scaled to a requested size.
-            save(R"({"font":"Cozette / Medium","font_size":14})");
-            QTRY_COMPARE(appearance.font(), original);
-            save(R"({"font":"Cozette / Medium","font_size":13})");
-            QTRY_COMPARE(QFontInfo(appearance.font()).family(), QString("Cozette"));
+            QTRY_VERIFY(QFontInfo(appearance.font()).family().startsWith("Dome Qt BDF "));
+            QTRY_VERIFY(QFontInfo(quickFont()).family().startsWith("Dome Qt BDF "));
+            QCOMPARE(QApplication::palette().color(QPalette::Window), QColor(31,37,45));
+            save(R"({"font":"Ttyp0 / Regular","font_size":13,"light":false})");
+            QTRY_VERIFY(QFontInfo(appearance.font()).family().startsWith("Dome Qt BDF "));
+            // A second real native strike resolves from its own BDF file.
+            save(R"({"font":"Ttyp0 / Regular","font_size":14})");
+            QTRY_COMPARE(QFontInfo(appearance.font()).pixelSize(), 14);
+            save(R"({"font":"Ttyp0 / Regular","font_size":13})");
+            QTRY_VERIFY(QFontInfo(appearance.font()).family().startsWith("Dome Qt BDF "));
             save("{"); QTest::qWait(200);
-            QCOMPARE(QFontInfo(appearance.font()).family(), QString("Cozette"));
+            QVERIFY(QFontInfo(appearance.font()).family().startsWith("Dome Qt BDF "));
         }
         QApplication::setFont(original); QApplication::setPalette(palette);
         {
             Appearance native(false);
-            save(R"({"font":"Cozette / Medium","font_size":13,"light":true})");
+            save(R"({"font":"Ttyp0 / Regular","font_size":13,"light":true})");
             QTest::qWait(200);
-            QCOMPARE(QApplication::font(), original);
+            QVERIFY(QFontInfo(QApplication::font()).family().startsWith("Dome Qt BDF "));
+            QCOMPARE(QFontInfo(QApplication::font()).pixelSize(), 16);
             QCOMPARE(QApplication::palette(), palette);
             QFont changed("sans-serif");changed.setPixelSize(19);
             QApplication::setFont(changed);

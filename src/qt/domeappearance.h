@@ -13,12 +13,31 @@
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QProcess>
 #include <functional>
 #include <cmath>
 
 // Per-application adapter: no dependency on a sibling checkout or global Qt config.
 class DomeAppearance : public QObject {
 public:
+    static void bootstrapFonts() {
+        QString tool=qEnvironmentVariable("DOME_BDF_FONT_TOOL");
+        if(tool.isEmpty())tool=QStandardPaths::findExecutable("dome-bdf-font");
+        QDir source(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath());
+        for(int n=0;tool.isEmpty() && n<6;++n){
+            auto candidate=source.filePath("dome-compositor/target/debug/dome-bdf-font");
+            if(QFileInfo::exists(candidate))tool=candidate;
+            source.cdUp();
+        }
+        if(tool.isEmpty())qFatal("de-xr requires dome-bdf-font");
+        QProcess resolver;resolver.start(tool,{"Unifont / Sans-Serif","16","1"});
+        if(!resolver.waitForFinished(30000)||resolver.exitCode()!=0)qFatal("Cannot initialize BDF Fontconfig");
+        auto choice=QJsonDocument::fromJson(resolver.readAllStandardOutput()).object();
+        auto configuration=choice["fontconfig"].toString();
+        qputenv("DE_XR_FONTCONFIG_BASE",choice["fontconfig_base"].toString("/etc/fonts/fonts.conf").toUtf8());
+        if(configuration.isEmpty())qFatal("Missing BDF Fontconfig configuration");
+        qputenv("FONTCONFIG_FILE",configuration.toUtf8());
+    }
     static bool inSession() {
         const auto names = qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':');
         return names.contains("Dome") || names.contains("DomeD") || names.contains("dome");
@@ -26,6 +45,8 @@ public:
     explicit DomeAppearance(bool enabled, QObject *parent = nullptr)
         : QObject(parent), originalFont(QApplication::font()), originalPalette(QApplication::palette()), active(enabled) {
         if (!active) {
+            active = true; reload(); active = false;
+            QApplication::setPalette(originalPalette);
             connect(qApp, &QGuiApplication::fontChanged, this, [this](const QFont &font) { currentFont = font; if (changed) changed(); });
             return;
         }
@@ -51,20 +72,32 @@ public:
             if (error.error != QJsonParseError::NoError || !doc.isObject()) return;
             config = doc.object();
         }
-        const auto id = config.value("font").toString("GNU Unifont / Sans-Serif");
-        const auto parts = id.split(" / ");
+        const auto id = config.value("font").toString("Unifont / Sans-Serif");
         const double size = config.value("font_size").toDouble(16);
         const auto accent = QColor(config.value("accent").toString("#6babff"));
-        if (id.size() > 256 || size < 8 || size > 24 || size != std::floor(size) || !accent.isValid()) return;
-        QFont selected = originalFont;
-        if (parts.size() == 2 && QFontDatabase::families().contains(parts[0]) &&
-            QFontDatabase::styles(parts[0]).contains(parts[1]) &&
-            !QFontDatabase::isSmoothlyScalable(parts[0], parts[1])) {
-            QFont candidate(parts[0]); candidate.setStyleName(parts[1]); candidate.setPixelSize(int(size));
-            candidate.setStyleStrategy(QFont::StyleStrategy(QFont::PreferBitmap | QFont::NoAntialias));
-            QFontInfo resolved(candidate);
-            if (resolved.family() == parts[0] && resolved.pixelSize() == int(size)) selected = candidate;
+        if (id.size() > 256 || size < 4 || size > 64 || size != std::floor(size) || !accent.isValid()) return;
+        int scale = config.value("font_scale").toInt(1);
+        if (scale != 1 && scale != 2) return;
+        QString tool = qEnvironmentVariable("DOME_BDF_FONT_TOOL");
+        if (tool.isEmpty()) tool = QStandardPaths::findExecutable("dome-bdf-font");
+        if (tool.isEmpty()) {
+            QDir source(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath());
+            for (int n=0;n<6 && tool.isEmpty();++n) {
+                auto candidate=source.filePath("dome-compositor/target/debug/dome-bdf-font");
+                if(QFileInfo::exists(candidate)) tool=candidate;
+                source.cdUp();
+            }
         }
+        if(tool.isEmpty()) qFatal("de-xr requires dome-bdf-font and a BDF font");
+        QProcess resolver; resolver.start(tool,{"--qt",id,QString::number(int(size)),QString::number(scale)});
+        if(!resolver.waitForFinished(30000)||resolver.exitCode()!=0)return;
+        auto choice=QJsonDocument::fromJson(resolver.readAllStandardOutput()).object();
+        int loaded=QFontDatabase::addApplicationFont(choice["file"].toString());
+        auto families=QFontDatabase::applicationFontFamilies(loaded);
+        if(families.isEmpty())return;
+        QFont selected(families.first());selected.setStyleName(choice["style"].toString());
+        selected.setPixelSize(choice["pixels"].toInt());
+        selected.setStyleStrategy(QFont::StyleStrategy(QFont::PreferBitmap|QFont::NoAntialias|QFont::NoFontMerging));
         const bool light = config.value("light").toBool(false);
         const QColor surface = light ? QColor(229,233,239) : QColor(31,37,45);
         const QColor text = light ? QColor(30,37,46) : QColor(231,235,241);
