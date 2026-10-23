@@ -114,7 +114,7 @@ int main(int argc, char **argv) try {
                                                g_variant_new_strv(nullptr, 0)));
   auto exported = g_variant_get_child_value(reply, 1);
   int toggle = commandId(exported, "Spatial view");
-  require(toggle > 0 && commandId(exported, "Open") > 0,
+  require(toggle > 0 && commandId(exported, "Open") > 0 && commandId(exported, "Automount removable media") > 0 && commandId(exported, "Unmount device") > 0,
           "Universal menu must expose the real browser commands");
   g_variant_unref(exported); g_variant_unref(reply);
   for (bool visible : {false, true}) {

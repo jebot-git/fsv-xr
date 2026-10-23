@@ -1,9 +1,4 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
-#include "appearance.h"
-#include "desktop-menu.h"
-#include "gpu-window.h"
-#include "model.h"
-#include "spatial-view.h"
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Choice.H>
@@ -16,20 +11,53 @@
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Tile.H>
 #include <FL/fl_ask.H>
+
 #include <chrono>
 #include <ctime>
 #include <future>
 #include <iomanip>
 #include <optional>
 #include <sstream>
+
+#include "appearance.h"
+#include "desktop-menu.h"
+#include "devices-client.h"
+#include "gpu-window.h"
+#include "model.h"
+#include "spatial-view.h"
 namespace fs = std::filesystem;
 class Sidebar : public Fl_Group {
 public:
-  Fl_Hold_Browser list{8, 80, 250, 470};
+  Fl_Hold_Browser list{8, 80, 250, 280};
+  Fl_Box devicesTitle{8, 364, 250, 22, "Devices"};
+  Fl_Hold_Browser devices{8, 386, 250, 120};
+  Fl_Button deviceOpen{8, 510, 80, 28, "Open"};
+  Fl_Button deviceUnmount{90, 510, 80, 28, "Unmount"};
+  Fl_Button deviceRemove{172, 510, 86, 28, "Remove"};
   Fl_Multiline_Output inspector{8, 550, 250, 110};
   Sidebar() : Fl_Group(8, 80, 250, 580) {
     end();
+    devicesTitle.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    devices.format_char(0);
+    deviceOpen.tooltip("Mount or unlock the selected device and open it");
+    deviceUnmount.tooltip(
+        "Unmount without forcing; busy volumes remain mounted");
+    deviceRemove.tooltip("Unmount all volumes on the drive and safely eject or "
+                         "power it off");
     resizable(list);
+  }
+  void resize(int X, int Y, int W, int H) override {
+    Fl_Group::resize(X, Y, W, H);
+    int info = std::min(110, H / 4), media = std::min(120, H / 4);
+    int files = std::max(40, H - info - media - 62);
+    list.resize(X, Y, W, files);
+    devicesTitle.resize(X, Y + files + 4, W, 22);
+    devices.resize(X, Y + files + 26, W, media);
+    int buttonY = Y + files + media + 30, bw = (W - 4) / 3;
+    deviceOpen.resize(X, buttonY, bw, 28);
+    deviceUnmount.resize(X + bw + 2, buttonY, bw, 28);
+    deviceRemove.resize(X + 2 * bw + 4, buttonY, W - 2 * bw - 4, 28);
+    inspector.resize(X, Y + H - info, W, info);
   }
 };
 class Browser : public dx::GpuWindow {
@@ -67,6 +95,230 @@ class Browser : public dx::GpuWindow {
   bool cut = false;
   fs::path temporary;
   uint64_t preview = 0;
+  DevicesClient devicesClient;
+  Json deviceRows = Json::array();
+  std::string deviceSignature, deviceError, pendingDevice;
+  bool deviceReady = false, automountEnabled = true, openAfterMount = false;
+  std::chrono::steady_clock::time_point nextDevices{}, pendingDeviceDeadline{};
+  Json selectedDevice() const {
+    int row = sidebar.devices.value() - 1;
+    return row >= 0 && row < int(deviceRows.size()) ? deviceRows[row] : Json();
+  }
+  static std::string plainLabel(std::string label) {
+    for (auto &c : label)
+      if (static_cast<unsigned char>(c) < 32)
+        c = ' ';
+    return label;
+  }
+  void updateDevices(const Json &state) {
+    deviceReady = true;
+    automountEnabled = state.value("enabled", true);
+    deviceError = state.value("error", std::string());
+    Json rows = Json::array(
+        {Json{{"id", "home"},
+              {"name", "Home"},
+              {"mounts", Json::array({getenv("HOME") ? getenv("HOME") : "/"})}},
+         Json{{"id", "root"},
+              {"name", "File System"},
+              {"mounts", Json::array({"/"})}}});
+    for (auto row : state.at("devices"))
+      rows.push_back(std::move(row));
+    auto signature = rows.dump();
+    if (signature != deviceSignature) {
+      auto previous = selectedDevice();
+      std::string identity =
+          previous.is_null() ? "" : previous.value("id", std::string());
+      // Leave a disconnected/unmounted volume instead of
+      // showing stale contents.
+      for (const auto &old : deviceRows) {
+        if (old.value("id", std::string()) == "root" ||
+            old.value("id", std::string()) == "home")
+          continue;
+        for (const auto &mount : old.value("mounts", Json::array())) {
+          std::string prefix = mount.get<std::string>();
+          bool present = false;
+          for (const auto &row : rows)
+            for (const auto &m : row.value("mounts", Json::array()))
+              if (m == mount)
+                present = true;
+          auto current = location.path.string();
+          if (!present &&
+              (current == prefix || current.rfind(prefix + "/", 0) == 0))
+            load({getenv("HOME") ? getenv("HOME") : "/"}, false);
+        }
+      }
+      deviceRows = std::move(rows);
+      deviceSignature = signature;
+      sidebar.devices.clear();
+      int index = 0;
+      for (const auto &row : deviceRows) {
+        std::string label =
+            plainLabel(row.value("name", std::string("Volume")));
+        if (row.value("locked", false))
+          label += " [locked]";
+        else if (row.value("mounts", Json::array()).empty())
+          label += " [unmounted]";
+        if (row.value("busy", false))
+          label += " [...]";
+        if (!row.value("error", std::string()).empty())
+          label += " [error]";
+        sidebar.devices.add(label.c_str());
+        if (row.value("id", std::string()) == identity)
+          sidebar.devices.value(index + 1);
+        ++index;
+      }
+    }
+    if (!pendingDevice.empty()) {
+      for (const auto &row : deviceRows)
+        if (row.value("backing", std::string()) == pendingDevice) {
+          auto id = row.value("id", std::string());
+          pendingDevice.clear();
+          for (size_t i = 0; i < deviceRows.size(); ++i)
+            if (deviceRows[i].value("id", std::string()) == id)
+              sidebar.devices.value(i + 1);
+          deviceCommand("Open device");
+          break;
+        }
+      if (std::chrono::steady_clock::now() > pendingDeviceDeadline) {
+        pendingDevice.clear();
+        status.copy_label("Unlocked device is not available yet. "
+                          "Select it to open.");
+      }
+    }
+  }
+  void pollDevices() {
+    try {
+      if (auto result = devicesClient.result())
+        updateDevices(Json::parse(*result));
+    } catch (const std::exception &e) {
+      deviceReady = false;
+      deviceError = e.what();
+    }
+    try {
+      if (auto result = devicesClient.result(true)) {
+        if (openAfterMount && !result->empty()) {
+          auto target = Json::parse(*result).value("path", std::string());
+          if (!target.empty())
+            load({target});
+        }
+        openAfterMount = false;
+        status.copy_label("Device operation completed.");
+        nextDevices = {};
+      }
+    } catch (const std::exception &e) {
+      openAfterMount = false;
+      pendingDevice.clear();
+      status.copy_label(e.what());
+      nextDevices = {};
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (now >= nextDevices) {
+      devicesClient.refresh();
+      nextDevices = now + std::chrono::seconds(1);
+    }
+    auto row = selectedDevice();
+    bool selected = !row.is_null(),
+         idle = !devicesClient.busy() && !operation.valid();
+    bool mounted = selected && !row.value("mounts", Json::array()).empty();
+    bool removable = selected && row.value("removable", false);
+    auto enable = [&](Fl_Widget &widget, bool value) {
+      if (value)
+        widget.activate();
+      else
+        widget.deactivate();
+    };
+    enable(sidebar.deviceOpen, selected && idle);
+    enable(sidebar.deviceUnmount, removable && mounted && idle);
+    enable(sidebar.deviceRemove,
+           removable && idle &&
+               (row.value("poweroff", false) || row.value("ejectable", false)));
+    dx::enable_menu(menu, "Devices/Open device", selected && idle);
+    dx::enable_menu(menu, "Devices/Unmount device",
+                    removable && mounted && idle);
+    dx::enable_menu(menu, "Devices/Safely remove drive",
+                    sidebar.deviceRemove.active());
+    dx::enable_menu(menu, "Devices/Lock encrypted device",
+                    removable && idle &&
+                        !row.value("backing", std::string()).empty());
+    dx::enable_menu(menu, "Devices/Automount removable media",
+                    deviceReady && idle);
+    if (auto item = menu.find_item("Devices/Automount removable media")) {
+      int index = int(item - menu.menu());
+      int mode = menu.mode(index);
+      if (automountEnabled)
+        mode |= FL_MENU_VALUE;
+      else
+        mode &= ~FL_MENU_VALUE;
+      menu.mode(index, mode);
+    }
+    sidebar.devicesTitle.copy_label(deviceReady && deviceError.empty()
+                                        ? "Devices"
+                                        : "Devices (service unavailable)");
+    sidebar.devicesTitle.copy_tooltip(
+        deviceError.empty() ? "Removable devices and mounted volumes"
+                            : deviceError.c_str());
+  }
+  void deviceInfo() {
+    auto row = selectedDevice();
+    if (row.is_null())
+      return;
+    std::string text = plainLabel(row.value("name", std::string()));
+    text += "\n" + row.value("device", std::string());
+    for (const auto &mount : row.value("mounts", Json::array()))
+      text += "\n" + mount.get<std::string>();
+    if (row.value("locked", false))
+      text += "\nEncrypted volume (locked)";
+    if (!row.value("error", std::string()).empty())
+      text += "\n" + row.value("error", std::string());
+    inspector.value(text.c_str());
+  }
+  void deviceCommand(const std::string &name) {
+    if (devicesClient.busy() || operation.valid()) {
+      status.copy_label("Wait for the current operation.");
+      return;
+    }
+    if (name == "Automount removable media") {
+      devicesClient.automount(!automountEnabled);
+      return;
+    }
+    auto row = selectedDevice();
+    if (row.is_null())
+      return;
+    std::string identity = row.value("id", std::string());
+    auto mounts = row.value("mounts", Json::array());
+    if (name == "Open device") {
+      if (!mounts.empty()) {
+        load({mounts[0].get<std::string>()});
+        return;
+      }
+      if (row.value("locked", false)) {
+        auto secret =
+            fl_password("Unlock %s:", "",
+                        plainLabel(row.value("name", std::string())).c_str());
+        if (!secret)
+          return;
+        devicesClient.act("unlock", identity, secret);
+        pendingDevice = identity;
+        pendingDeviceDeadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(130);
+      } else {
+        openAfterMount = true;
+        devicesClient.act("mount", identity);
+      }
+    } else if (name == "Unmount device")
+      devicesClient.act("unmount", identity);
+    else if (name == "Lock encrypted device")
+      devicesClient.act("lock", identity);
+    else if (name == "Safely remove drive") {
+      if (fl_choice("Unmount all volumes on %s and safely remove "
+                    "the drive?",
+                    "Cancel", "Remove", nullptr,
+                    plainLabel(row.value("name", std::string())).c_str()) != 1)
+        return;
+      devicesClient.act("remove", identity);
+    }
+    status.copy_label("Device operation in progress...");
+  }
   static void tick(void *p) {
     ((Browser *)p)->poll();
     Fl::repeat_timeout(.05, tick, p);
@@ -78,6 +330,7 @@ class Browser : public dx::GpuWindow {
       s->command(bar->mvalue()->label());
   }
   void poll() {
+    pollDevices();
     bool available = entry() != nullptr, idle = !operation.valid(),
          writable = !location.archive && idle;
     for (auto name : {"File/Open", "File/Properties", "Edit/Copy location"})
@@ -103,7 +356,8 @@ class Browser : public dx::GpuWindow {
           fillList();
           status.copy_label((std::to_string(scene.entries.size()) +
                              " entries. " + result.warning +
-                             "  Wheel: zoom · Right drag: orbit · Middle/Shift "
+                             "  Wheel: zoom · Right drag: "
+                             "orbit · Middle/Shift "
                              "drag: pan · F: focus · R: reset")
                                 .c_str());
         }
@@ -423,6 +677,29 @@ public:
     panels.end();
     end();
     add(status);
+    sidebar.resize(sidebar.x(), sidebar.y(), sidebar.w(), sidebar.h());
+    sidebar.devices.callback(
+        [](Fl_Widget *, void *p) {
+          static_cast<Browser *>(p)->deviceInfo();
+          if (Fl::event_clicks())
+            static_cast<Browser *>(p)->deviceCommand("Open device");
+        },
+        this);
+    sidebar.deviceOpen.callback(
+        [](Fl_Widget *, void *p) {
+          static_cast<Browser *>(p)->deviceCommand("Open device");
+        },
+        this);
+    sidebar.deviceUnmount.callback(
+        [](Fl_Widget *, void *p) {
+          static_cast<Browser *>(p)->deviceCommand("Unmount device");
+        },
+        this);
+    sidebar.deviceRemove.callback(
+        [](Fl_Widget *, void *p) {
+          static_cast<Browser *>(p)->deviceCommand("Safely remove drive");
+        },
+        this);
     list.format_char(0);
     list.callback(
         [](Fl_Widget *, void *p) {
@@ -464,6 +741,12 @@ public:
              {"View/Spatial view", FL_F + 6},
              {"Tools/Terminal here", 0}})
       menu.add(item.first, item.second, action, this);
+    for (auto item :
+         {"Devices/Open device", "Devices/Unmount device",
+          "Devices/Safely remove drive", "Devices/Lock encrypted device"})
+      menu.add(item, 0, action, this);
+    menu.add("Devices/Automount removable media", 0, action, this,
+             FL_MENU_TOGGLE | FL_MENU_VALUE);
     settings(false);
     sortMenu(menu, "View/Sort by/");
     layoutChoice.add("MapV|TreeV|DiscV");
@@ -510,7 +793,8 @@ public:
     panels.resizable(spatial);
     panels.init_size_range(160, 160);
     if (dx::dome()) {
-      // Keep the real command tree for DBusMenu and keyboard shortcuts.
+      // Keep the real command tree for DBusMenu and keyboard
+      // shortcuts.
       menu.hide();
       for (Fl_Widget *widget : std::vector<Fl_Widget *>{
                &upButton, &path, &tabChoice, &layoutChoice})
@@ -552,7 +836,8 @@ public:
         target.path = fs::canonical(target.path);
         if (!fs::is_directory(target.path)) {
           if (!fsv::archiveSupported(target.path))
-            throw std::runtime_error("Not a directory or supported archive");
+            throw std::runtime_error("Not a directory or "
+                                     "supported archive");
           target.archive = true;
         }
       }
@@ -604,7 +889,8 @@ public:
     } else if (!node.member.empty()) {
       try {
         if (temporary.empty())
-          throw std::runtime_error("Cannot create private archive preview");
+          throw std::runtime_error("Cannot create private archive "
+                                   "preview");
         auto output = fsv::materialize({location.path, node.member, true},
                                        temporary / std::to_string(++preview));
         dx::spawn({"gio", "open", output.string()});
@@ -624,6 +910,12 @@ public:
     spatial.setSelected(selected);
   }
   void command(const std::string &name) {
+    if (name == "Open device" || name == "Unmount device" ||
+        name == "Safely remove drive" || name == "Lock encrypted device" ||
+        name == "Automount removable media") {
+      deviceCommand(name);
+      return;
+    }
     if (sortCommand(name))
       return;
     auto e = entry();
@@ -679,8 +971,9 @@ public:
       if (spatial.visible()) {
         sidebarWidth = sidebar.w();
         spatial.hide();
-        // A tile considers even hidden children when resizing and hit testing.
-        // Remove the hidden viewport from the tile until it is restored.
+        // A tile considers even hidden children when
+        // resizing and hit testing. Remove the hidden
+        // viewport from the tile until it is restored.
         add(spatial);
         sidebar.resize(panels.x(), panels.y(), panels.w(), panels.h());
         panels.resizable(sidebar);
@@ -698,11 +991,11 @@ public:
       redraw();
     } else if (name == "Properties") {
       if (e)
-        fl_message(
-            "%s\n%s\n%s · %llu bytes\nModified: %s\nCreated: %s\nAccessed: %s",
-            e->name.c_str(), e->path.c_str(), e->type.c_str(),
-            (unsigned long long)e->bytes, date(e->modified).c_str(),
-            date(e->created).c_str(), date(e->accessed).c_str());
+        fl_message("%s\n%s\n%s · %llu bytes\nModified: "
+                   "%s\nCreated: %s\nAccessed: %s",
+                   e->name.c_str(), e->path.c_str(), e->type.c_str(),
+                   (unsigned long long)e->bytes, date(e->modified).c_str(),
+                   date(e->created).c_str(), date(e->accessed).c_str());
     } else if (name == "Find...") {
       auto value =
           fl_input("Filter this directory (empty shows all):", filter.c_str());
@@ -741,8 +1034,8 @@ public:
       if (!source.empty() && fsv::archiveSupported(source))
         work([source] { fsv::extract(source); });
     } else if (location.archive) {
-      status.copy_label(
-          "Archive contents are read-only. Extract to modify them.");
+      status.copy_label("Archive contents are read-only. Extract to modify "
+                        "them.");
     } else if (name == "Cut" || name == "Copy") {
       if (e) {
         clipboard = {e->path.string()};
@@ -777,7 +1070,8 @@ public:
         work([folder, parent] {
           if (folder.empty() || fs::path(folder).filename() != folder ||
               folder == "." || folder == "..")
-            throw std::runtime_error("Enter a single folder name");
+            throw std::runtime_error("Enter a single folder "
+                                     "name");
           if (!fs::create_directory(parent / folder))
             throw std::runtime_error("Folder already exists");
         });
@@ -846,10 +1140,10 @@ int main(int argc, char **argv) {
     else if (arg == "--layout" && i + 1 < argc)
       layout = argv[++i];
     else if (arg == "--openxr" || arg == "--xr") {
-      fprintf(
-          stderr,
-          "fsvr: standalone OpenXR is not ported. Launch fsvr through DomeD's "
-          "XR application launcher for the GPU Wayland/XR frontend.\n");
+      fprintf(stderr, "fsvr: standalone OpenXR is not ported. Launch "
+                      "fsvr through DomeD's "
+                      "XR application launcher for the GPU "
+                      "Wayland/XR frontend.\n");
       return 2;
     } else if (argv[i][0] != '-')
       location.path = argv[i];
@@ -860,7 +1154,8 @@ int main(int argc, char **argv) {
   browser.show();
   if (smoke) {
     browser.smoke(smoke);
-    printf("{\"toolkit\":\"FLTK\",\"renderer\":\"OpenGL\",\"entries\":%zu}\n",
+    printf("{\"toolkit\":\"FLTK\",\"renderer\":\"OpenGL\",\"entries\":"
+           "%zu}\n",
            browser.currentScene().entries.size());
     return 0;
   }

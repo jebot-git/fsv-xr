@@ -75,10 +75,54 @@ it and updates the side list; the resizable sidebar remains separate from the
 viewport when switching views or resizing the window.
 DomeD's appearance and bitmap font changes apply live. `--xr` and `--openxr`
 explicitly fail because standalone OpenXR hands/controllers have not been ported.
-Trash restore/empty, Places and cross-application drag/drop do not yet have the
+Trash restore/empty, full Places and cross-application drag/drop do not yet have the
 Qt frontend's complete UI. Bitmap shaping/bidi, glyph fallback, accessibility/IME
 and broad fractional-scale coverage remain incomplete. Simulated HMD tests do
 not establish physical headset or WiVRn streaming behavior.
+
+## Native devices and automounting
+
+The FLTK sidebar now has a live **Devices** list: Home, File System, mounted
+volumes, and removable media even when unmounted or encrypted. Double-click or
+**Open** mounts a removable filesystem or asks for its encryption passphrase in
+a native FLTK password dialog, then opens the mount returned by UDisks2.
+**Unmount** never forces busy volumes. **Remove** unmounts the drive's volumes,
+locks unlocked encrypted containers, then ejects/powers off the drive; a failed
+step stops removal. Drives sharing a UDisks sibling ID are handled together.
+System/fixed volumes are browse-only. The inspector shows the device, mount
+paths, and operation errors. The current view returns Home when its mount goes
+away. Device actions also appear in DomeD's universal menu.
+
+`fsvr-devices` is a per-user Python/GIO daemon using UDisks2 over the system bus.
+It imports **no GTK, GDK or Qt** and has no graphical frontend. Runtime requirements
+are Python 3, PyGObject with GIO, and UDisks2 (Fedora: `python3-gobject-base`,
+`udisks2`). FSVR communicates asynchronously over the login-session bus so device
+and authorization waits do not block its UI. Existing UDisks/Polkit permissions
+apply; no broad permission rules are installed. Passphrases travel over D-Bus,
+are not stored in settings or logs, and are never passed in process arguments.
+
+The daemon automounts eligible removable filesystems at startup/hotplug. It
+respects UDisks ignore/system/auto hints, excludes loop devices and configured
+fstab/crypttab volumes, and does not automatically unlock encrypted devices.
+Each insertion is tried once, so manual unmounts and failures do not create
+remount/retry loops. **Devices → Automount removable media** persists the toggle
+in `$XDG_CONFIG_HOME/fsvr/automount.json` (private mode 0600). Turning it back on
+explicitly retries eligible present media.
+
+CMake installs the daemon, `fsvr-automount.service` user unit, and D-Bus activation
+file. Enable the service for the desktop session with:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now fsvr-automount.service
+```
+
+A system installation can enable the unit globally using `systemctl --global
+enable fsvr-automount.service`; it is wanted by `dome-session.target` and
+`graphical-session.target`. Opening FSVR also activates the daemon on demand.
+No graphical or XR session needs to be restarted. `ctest` covers policy,
+private-bus fake-UDisks hotplug/operations, and real FLTK device controls. These
+checks do not mount, unlock, eject or power off physical test drives.
 
 ## Opt-in Qt6 frontend
 

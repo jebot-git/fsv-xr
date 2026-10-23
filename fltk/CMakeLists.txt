@@ -47,3 +47,31 @@ if(BUILD_TESTING)
     endforeach()
   endif()
 endif()
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+configure_file(../services/fsvr-automount.service.in fsvr-automount.service @ONLY)
+configure_file(../services/org.fsvxr.Devices.service.in org.fsvxr.Devices.service @ONLY)
+install(PROGRAMS ../services/fsvr-devices.py DESTINATION ${CMAKE_INSTALL_LIBEXECDIR} RENAME fsvr-devices)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fsvr-automount.service DESTINATION lib/systemd/user)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.fsvxr.Devices.service DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services)
+if(BUILD_TESTING)
+  add_test(NAME devices-policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../services/test-devices.py)
+endif()
+
+if(BUILD_TESTING)
+  add_executable(fsv-devices-ui-test devices-ui-test.cpp spatial-view.cpp)
+  target_compile_features(fsv-devices-ui-test PRIVATE cxx_std_17)
+  target_link_libraries(fsv-devices-ui-test PRIVATE fsv-native-core fltk::gl-shared OpenGL::GL fltk::fltk-shared fltk::images-shared PkgConfig::FONTCONFIG)
+  de_xr_desktop_menu(fsv-devices-ui-test)
+  add_test(NAME devices-dbus COMMAND ${DBUS_RUN_SESSION} -- ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../services/test-devices.py --integration)
+  set_tests_properties(devices-dbus PROPERTIES TIMEOUT 40)
+endif()
+
+if(BUILD_TESTING AND XVFB_RUN AND DBUS_RUN_SESSION)
+  add_test(NAME devices-ui COMMAND ${CMAKE_COMMAND} -E env
+    FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+    FSVR_DEVICE_UI_TEST_BINARY=$<TARGET_FILE:fsv-devices-ui-test>
+    FSVR_DEVICE_UI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/devices-ui.ppm
+    ${DBUS_RUN_SESSION} -- ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../services/test-devices.py --integration)
+  set_tests_properties(devices-ui PROPERTIES TIMEOUT 60)
+endif()

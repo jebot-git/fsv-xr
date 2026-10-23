@@ -1,0 +1,15 @@
+[Unit]
+Description=FSVR removable devices and automounter (GIO/UDisks2)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.fsvxr.Devices
+ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/fsvr-devices
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target dome-session.target

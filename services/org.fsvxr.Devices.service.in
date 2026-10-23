@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.fsvxr.Devices
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/fsvr-devices
+SystemdService=fsvr-automount.service
