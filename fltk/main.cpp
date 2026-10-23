@@ -718,7 +718,7 @@ public:
       Fl::copy(text.data(), text.size(), 1);
     } else if (name == "Terminal here") {
       if (!location.archive)
-        dx::spawn({"env", "-C", location.path.string(), "ghostty-xr-launch"});
+        dx::spawn({"env", "-C", location.path.string(), "x-terminal-emulator"});
     } else if (name == "Quit")
       hide();
     else if (name == "Compress...") {
