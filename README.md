@@ -8,7 +8,7 @@ with different controls, options and feature coverage.
 ## Default FLTK build and installation
 
 Requires C++17, CMake 3.21+, the de-xr patched FLTK **1.4.5** shared libraries,
-OpenGL, libarchive, Fontconfig, GIO, Wayland/X11 development libraries and
+OpenGL 3.3, EGL, OpenXR headers/loader, libarchive, Fontconfig, GIO, Wayland/X11 development libraries and
 `wayland-scanner`. Tests additionally use FreeType. FLTK patches supply native
 bitmap strikes, DomeD app IDs/menus and Wayland dialog fixes; an arbitrary system
 FLTK package is not a tested substitute. See [FLTK notes](FLTK_EXPERIMENT.md).
@@ -22,12 +22,11 @@ ctest --test-dir build-fltk --output-on-failure
 LD_LIBRARY_PATH="$FLTK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   ./build-fltk/fltk/fsvr --layout tree "$HOME"
 DESTDIR="$PWD/stage" cmake --install build-fltk --prefix /usr/local
-install -Dm644 docs/man/fsvr.1 stage/usr/local/share/man/man1/fsvr.1
 ```
 
 Build and stage as your regular user. Review the staged tree before installing
-system files with administrator privileges. The FLTK CMake target currently
-installs the executable only; stage its manual explicitly as above. Supply the
+system files with administrator privileges. The FLTK CMake target installs its executable, manual, model dependency notices
+and device service files. Supply the
 matching FLTK runtime through your deployment wrapper or library search path.
 The Qt desktop entries and `fsvr-dome-default` helper belong to the opt-in Qt
 installation and are not installed by this FLTK target.
@@ -74,11 +73,76 @@ Keyboard shortcuts remain available. Clicking a folder in the spatial view selec
 it and updates the side list; the resizable sidebar remains separate from the
 viewport when switching views or resizing the window.
 DomeD's appearance and bitmap font changes apply live. `--xr` and `--openxr`
-explicitly fail because standalone OpenXR hands/controllers have not been ported.
+explicitly fail for the filesystem scene. Native glTF objects have their own
+OpenXR overlay viewer, described below.
 Trash restore/empty, full Places and cross-application drag/drop do not yet have the
 Qt frontend's complete UI. Bitmap shaping/bidi, glyph fallback, accessibility/IME
 and broad fractional-scale coverage remain incomplete. Simulated HMD tests do
 not establish physical headset or WiVRn streaming behavior.
+
+## Live glTF previews and XR objects
+
+Select a local `.gltf` or `.glb` to decode it in the background. Double-click it,
+or choose **File → Live glTF preview**, to open the GPU preview. Drag to orbit,
+use the wheel to zoom, middle-drag or Shift-drag to pan, and press R to reset.
+Orbit and animation playback can be paused; the animation selector chooses a clip.
+DomeD receives the preview's universal menu; other desktops get a local menu.
+
+**Open in XR** renders the selected object as a separate stereoscopic overlay
+above the existing DomeD session. It requires a connected headset and a runtime
+with OpenGL/EGL and `XR_EXTX_overlay` support; it never silently takes over the
+primary session. Close XR in the preview to remove the object. The browser owns
+the XR process and closes it on exit.
+
+Touch/Quest controllers are the default bindings:
+
+| Input | Object action |
+| --- | --- |
+| Squeeze either grip near the object or aim at it | Grab |
+| Move or turn one held controller | Move or turn the object |
+| Hold both grips and change hand spacing | Scale around the two-hand midpoint |
+| Turn both held controllers | Rotate, including wrist twist |
+| Release grips | Leave the object in place |
+| Left X / right B | Reset in front of the head / close XR |
+
+Touch Pro/Plus profiles are enabled when offered by the runtime; Index, Vive and
+simple-controller bindings are fallbacks. Tracking or focus loss releases grabs
+and requires a fresh grip press. Scaling is bounded between 0.02 and 20 metres
+for a normalized unit object. The initial object's longest side is 0.65 metres.
+
+Both views watch the model, external buffers and textures for edits. Reloads
+keep the last usable object if a file is temporarily malformed. Loads are
+cancelled/coalesced when selection changes; filesystem metadata, model decoding
+and device IPC stay off the FLTK event thread. Idle static previews reuse GPU
+geometry and avoid repeated redraws when Orbit is off. XR prepares animation
+once per stereo frame and reuses its geometry for both eyes.
+
+Supported content includes JSON/binary glTF 2, relative/embedded buffers,
+PNG/JPEG textures, sparse/normalized accessors, UV0/UV1 and texture transforms,
+metallic-roughness lighting, unlit/alpha/double-sided materials, node hierarchies,
+skinning, morphs, and linear/step/cubic animation. Specular-glossiness is
+approximated. Unsupported mandatory extensions (including Draco, meshopt and
+KTX2/Basis) report an error. Remote resources are not fetched. Extract archive
+members and their resources before previewing. Previews enforce memory, image,
+geometry, animation and hierarchy limits; very large assets can be rejected.
+
+Diagnostic commands do not open a desktop window:
+
+```sh
+fsvr --model-probe
+fsvr --model-render model.glb preview.ppm --seconds 0.5
+fsvr --model-xr model.glb --seconds 5 --report xr.json
+```
+
+`--seconds` is animation time for captures and a duration for XR (zero means
+unlimited XR). `-DFSVR_MODEL_XR=OFF` omits OpenXR integration while retaining the
+desktop preview and EGL captures. Tests cover decoding, actual GPU pixels,
+live reload, cancellation, controller manipulation and an isolated OpenXR API
+trace with real stereo render targets. `python3 tests/gltf/test-wayland.py`
+additionally tests native Wayland/universal menus against a private nested DomeD.
+A live WiVRn overlay check verifies stereo rendering, focus and both tracked
+controllers; automated traces do not establish physical controller ergonomics.
+Vendored licenses and source pins are in [third_party](third_party/README.md).
 
 ## Native devices and automounting
 

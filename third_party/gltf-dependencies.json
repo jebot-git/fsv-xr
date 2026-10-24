@@ -1,0 +1,22 @@
+{
+  "cgltf": {
+    "repository": "https://github.com/jkuhlmann/cgltf",
+    "commit": "85cd62382dfea638278962690cf515023f33ed00",
+    "file": "cgltf.h",
+    "sha256": "efb169dee911696b5d35fc8e3f7ea0c56d679debc529eba9ca6aa6443ba9d5e9"
+  },
+  "stb": {
+    "repository": "https://github.com/nothings/stb",
+    "commit": "003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5",
+    "file": "stb_image.h",
+    "sha256": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+  },
+  "native-graphics": {
+    "repository": "https://github.com/jebot-git/openbrush-native",
+    "commit": "818e80a442169864ae56f018fc0698dac57a9748",
+    "file": "src/graphics.cpp",
+    "origin": "Ghostty XR/FLTerm XR native EGL adapter",
+    "license": "MIT; LICENSE.native-graphics",
+    "adapted_as": "fltk/model-egl.cpp"
+  }
+}

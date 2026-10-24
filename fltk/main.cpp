@@ -11,6 +11,7 @@
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Tile.H>
 #include <FL/fl_ask.H>
+#include <sys/prctl.h>
 
 #include <chrono>
 #include <ctime>
@@ -23,6 +24,7 @@
 #include "desktop-menu.h"
 #include "devices-client.h"
 #include "gpu-window.h"
+#include "model-preview.h"
 #include "model.h"
 #include "spatial-view.h"
 namespace fs = std::filesystem;
@@ -87,7 +89,12 @@ class Browser : public dx::GpuWindow {
   std::string layout = "map", filter;
   fsv::SortOptions sorting;
   std::unique_ptr<DesktopMenu> desktop;
-  std::future<fsv::Result> scanning;
+  std::unique_ptr<ModelPreview> modelPreview;
+  struct ScanResult {
+    fsv::Result result;
+    fsv::Location location;
+  };
+  std::future<ScanResult> scanning;
   std::shared_ptr<std::atomic_bool> cancelled;
   std::optional<fsv::Location> pending;
   std::future<std::string> operation;
@@ -333,6 +340,11 @@ class Browser : public dx::GpuWindow {
     pollDevices();
     bool available = entry() != nullptr, idle = !operation.valid(),
          writable = !location.archive && idle;
+    bool model = entry() && !entry()->directory && entry()->member.empty() &&
+                 fsv::gltf::supported(entry()->path);
+    dx::enable_menu(menu, "File/Live glTF preview", model);
+    dx::enable_menu(menu, "File/Open in XR",
+                    model && modelPreview && modelPreview->canOpenXR());
     for (auto name : {"File/Open", "File/Properties", "Edit/Copy location"})
       dx::enable_menu(menu, name, available);
     for (auto name : {"File/Rename...", "File/Move to Trash",
@@ -350,12 +362,18 @@ class Browser : public dx::GpuWindow {
       try {
         auto result = scanning.get();
         if (!*cancelled && !pending) {
+          location = result.location;
+          tabs[tab].location = location;
+          if (!tabs[tab].history.empty())
+            tabs[tab].history[tabs[tab].cursor] = location;
+          path.value(location.display().c_str());
           scene = fsv::arrange(
-              fsv::sortEntries(std::move(result.entries), sorting), layout);
+              fsv::sortEntries(std::move(result.result.entries), sorting),
+              layout);
           spatial.setScene(&scene);
           fillList();
           status.copy_label((std::to_string(scene.entries.size()) +
-                             " entries. " + result.warning +
+                             " entries. " + result.result.warning +
                              "  Wheel: zoom · Right drag: "
                              "orbit · Middle/Shift "
                              "drag: pan · F: focus · R: reset")
@@ -381,8 +399,26 @@ class Browser : public dx::GpuWindow {
   void startScan(fsv::Location target) {
     cancelled = std::make_shared<std::atomic_bool>(false);
     auto token = cancelled;
-    scanning = std::async(std::launch::async,
-                          [target, token] { return fsv::scan(target, token); });
+    std::promise<ScanResult> promise;
+    scanning = promise.get_future();
+    std::thread([target, token, p = std::move(promise)]() mutable {
+      try {
+        if (!target.archive) {
+          target.path = fs::canonical(target.path);
+          if (!fs::is_directory(target.path)) {
+            if (!fsv::archiveSupported(target.path))
+              throw std::runtime_error("Not a "
+                                       "directory or "
+                                       "supported "
+                                       "archive");
+            target.archive = true;
+          }
+        }
+        p.set_value({fsv::scan(target, token), target});
+      } catch (...) {
+        p.set_exception(std::current_exception());
+      }
+    }).detach();
     status.copy_label("Scanning filesystem...");
   }
   void fillList() {
@@ -426,6 +462,19 @@ class Browser : public dx::GpuWindow {
     out << "\nType: " << e.type << "\nModified: " << date(e.modified)
         << "\nCreated: " << date(e.created)
         << "\nAccessed: " << date(e.accessed);
+    if (!e.directory &&
+        fsv::gltf::supported(e.member.empty() ? e.path : fs::path(e.member))) {
+      if (e.member.empty()) {
+        out << "\nDouble-click: live 3D preview. File "
+               "→ Open in XR for controller "
+               "manipulation.";
+        if (!modelPreview)
+          modelPreview = std::make_unique<ModelPreview>();
+        modelPreview->open(e.path, false);
+      } else
+        out << "\nExtract the model and resources for "
+               "a live glTF preview.";
+    }
     inspector.value(out.str().c_str());
   }
   const fsv::Entry *entry() const {
@@ -663,9 +712,16 @@ class Browser : public dx::GpuWindow {
     Fl_Menu_Button popup(Fl::event_x(), Fl::event_y(), 0, 0);
     popup.type(Fl_Menu_Button::POPUP3);
     for (auto label :
-         {"Open", "Open in new tab", "Properties", "Cut", "Copy", "Paste",
-          "Rename...", "Move to Trash", "Compress...", "Extract archive"})
+         {"Open", "Open in new tab", "Live glTF preview", "Open in XR",
+          "Properties", "Cut", "Copy", "Paste", "Rename...", "Move to Trash",
+          "Compress...", "Extract archive"})
       popup.add(label, 0, action, this);
+    auto e = entry();
+    bool model = e && !e->directory && e->member.empty() &&
+                 fsv::gltf::supported(e->path);
+    dx::enable_menu(popup, "Live glTF preview", model);
+    dx::enable_menu(popup, "Open in XR",
+                    model && modelPreview && modelPreview->canOpenXR());
     sortMenu(popup, "Sort by/");
     dx::style(&popup);
     popup.popup();
@@ -713,6 +769,8 @@ public:
         this);
     for (auto item : std::vector<std::pair<const char *, int>>{
              {"File/Open", FL_Enter},
+             {"File/Live glTF preview", 0},
+             {"File/Open in XR", 0},
              {"File/Open in new tab", FL_CTRL + FL_Enter},
              {"File/New tab", FL_CTRL + 't'},
              {"File/Close tab", FL_CTRL + 'w'},
@@ -803,6 +861,9 @@ public:
                     panels.h() + menu.h());
     }
     size_range(620, 400);
+    callback(
+        [](Fl_Widget *, void *p) { static_cast<Browser *>(p)->requestClose(); },
+        this);
     char name[] = "/tmp/fsvr-fltk-XXXXXX";
     if (auto value = mkdtemp(name))
       temporary = value;
@@ -813,14 +874,26 @@ public:
     Fl::remove_timeout(tick, this);
     if (cancelled)
       *cancelled = true;
-    if (scanning.valid())
-      scanning.wait();
+    // Promise-backed scanner workers own their state and honour
+    // cancellation; closing a browser must not wait for a slow
+    // mount's metadata request.
+    modelPreview.reset();
     if (operation.valid())
       operation.wait();
     if (!temporary.empty()) {
       std::error_code ec;
       fs::remove_all(temporary, ec);
     }
+  }
+  void requestClose() {
+    if (operation.valid()) {
+      status.copy_label("File operation in progress; the browser can close "
+                        "when it finishes.");
+      return;
+    }
+    if (modelPreview)
+      modelPreview->hide();
+    hide();
   }
   int handle(int event) override {
     if (event == FL_SHORTCUT && !menu.visible() && !Fl::modal() &&
@@ -832,15 +905,8 @@ public:
     try {
       if (operation.valid())
         throw std::runtime_error("Wait for the current file operation");
-      if (!target.archive) {
-        target.path = fs::canonical(target.path);
-        if (!fs::is_directory(target.path)) {
-          if (!fsv::archiveSupported(target.path))
-            throw std::runtime_error("Not a directory or "
-                                     "supported archive");
-          target.archive = true;
-        }
-      }
+      if (!target.archive)
+        target.path = fs::absolute(target.path).lexically_normal();
       if (tabs.empty()) {
         tabs.push_back({});
         tab = 0;
@@ -886,6 +952,10 @@ public:
       load(node.member.empty()
                ? fsv::Location{node.path}
                : fsv::Location{location.path, node.member, true});
+    } else if (node.member.empty() && fsv::gltf::supported(node.path)) {
+      if (!modelPreview)
+        modelPreview = std::make_unique<ModelPreview>();
+      modelPreview->open(node.path, true);
     } else if (!node.member.empty()) {
       try {
         if (temporary.empty())
@@ -921,7 +991,14 @@ public:
     auto e = entry();
     if (name == "Open")
       open();
-    else if (name == "Open in new tab") {
+    else if (name == "Live glTF preview" || name == "Open in XR") {
+      if (e && !e->directory && e->member.empty() &&
+          fsv::gltf::supported(e->path)) {
+        if (!modelPreview)
+          modelPreview = std::make_unique<ModelPreview>();
+        modelPreview->open(e->path, true, name == "Open in XR");
+      }
+    } else if (name == "Open in new tab") {
       if (e && e->directory)
         newTab(e->member.empty()
                    ? fsv::Location{e->path}
@@ -1013,7 +1090,7 @@ public:
       if (!location.archive)
         dx::spawn({"env", "-C", location.path.string(), "x-terminal-emulator"});
     } else if (name == "Quit")
-      hide();
+      requestClose();
     else if (name == "Compress...") {
       if (!e || location.archive)
         return;
@@ -1123,6 +1200,46 @@ public:
   fsv::Scene &currentScene() { return scene; }
 };
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--model-probe") {
+    auto p = fsv::gltf::probeXr();
+    puts(Json{{"available", p.available},
+              {"runtime", p.runtime},
+              {"message", p.message}}
+             .dump()
+             .c_str());
+    return 0;
+  }
+  if (argc > 2 && (std::string(argv[1]) == "--model-xr" ||
+                   std::string(argv[1]) == "--model-render")) {
+    try {
+      std::string mode = argv[1];
+      double seconds = 0;
+      fs::path report;
+      for (int i = mode == "--model-render" ? 4 : 3; i < argc; ++i) {
+        if (std::string(argv[i]) == "--seconds" && i + 1 < argc)
+          seconds = std::stod(argv[++i]);
+        else if (std::string(argv[i]) == "--report" && i + 1 < argc)
+          report = argv[++i];
+        else
+          throw std::runtime_error("Unknown model viewer argument");
+      }
+      if (mode == "--model-render") {
+        if (argc < 4)
+          throw std::runtime_error("--model-render requires FILE "
+                                   "OUTPUT.ppm");
+        fsv::gltf::renderModel(argv[2], argv[3], seconds);
+        return 0;
+      }
+      auto parent = getppid();
+      prctl(PR_SET_PDEATHSIG, SIGTERM);
+      if (parent == 1 || getppid() != parent)
+        return 1;
+      return fsv::gltf::runXr(argv[2], seconds, report);
+    } catch (const std::exception &e) {
+      fprintf(stderr, "fsvr: %s\n", e.what());
+      return 1;
+    }
+  }
   if (argc > 1 && std::string(argv[1]) == "--version") {
     puts("fsvr FLTK 1.4.5 OpenGL");
     return 0;

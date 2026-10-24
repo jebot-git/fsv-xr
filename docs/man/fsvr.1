@@ -1,9 +1,11 @@
-.TH FSVR 1 "2026-10-21" "de-xr" "User Commands"
+.TH FSVR 1 "2026-10-23" "de-xr" "User Commands"
 .SH NAME
 fsvr \- explore files in a native spatial browser
 .SH SYNOPSIS
 .nf
 fsvr [\-\-layout map|tree|disc] [PATH]
+fsvr \-\-model-xr FILE [\-\-seconds N] [\-\-report FILE]
+fsvr \-\-model-render FILE OUTPUT.ppm [\-\-seconds N]
 fsvr \-\-version
 .fi
 .SH DESCRIPTION
@@ -36,6 +38,31 @@ Launch through DomeD's XR application launcher instead.
 .PP
 FLTK does not implement the Qt help, desktop/domed routing, select or properties
 CLI flags. Use the corresponding interface commands where available.
+.TP
+.B \-\-model-probe
+Print model-overlay XR availability as JSON without opening a desktop window.
+.TP
+.BI "\-\-model-xr " FILE
+Open a stereoscopic glTF/GLB overlay above the existing XR session.
+Optional --seconds N limits duration (zero means unlimited); --report FILE
+writes diagnostics. Requires OpenGL/EGL and XR_EXTX_overlay support.
+.TP
+.BI "\-\-model-render " "FILE OUTPUT.ppm"
+Capture the model using native EGL. Optional --seconds N selects animation time.
+.SH LIVE GLTF PREVIEW
+Open a local glTF or GLB file, or choose File / Live glTF preview.
+Drag to orbit, wheel to zoom, middle/Shift-drag to pan, R to reset.
+The preview offers animation selection, playback, Orbit and Open in XR.
+Models, buffers and PNG/JPEG textures reload after edits; malformed reloads
+retain the last usable object. Loading and filesystem scans run in background
+workers. Resource limits and unsupported required extensions report errors.
+Archive members must first be extracted with their resources.
+.PP
+In XR, squeeze either grip near the object or while aiming at it to grab.
+Move/turn a held controller to move/turn the object. Hold both grips to scale
+and rotate around their midpoint. Release to leave it in place.
+Left X resets placement; right B closes the overlay. Tracking/focus loss
+releases grabs and requires a fresh press. Touch/Quest bindings are the default.
 .SH FLTK CONTROLS
 Left-click selects; double-click or Enter opens. Right-drag orbits the scene;
 a short right-click opens actions. Middle-drag or Shift+left-drag pans;
@@ -61,8 +88,8 @@ need statx support. Preferences are saved in the FLTK settings file.
 DomeD supplies the GPU Wayland/XR surface and ordinary mouse/keyboard seat;
 it owns the headset session. Application menus are exported through
 DBusMenu/KDE AppMenu where supported. DomeD palette and native bitmap strikes
-update live with the required FLTK patches. Standalone hands/controllers are
-not ported. Trash restore/empty, Places and cross-application drag/drop remain
+update live with the required FLTK patches. Native glTF overlays support motion
+controllers; standalone filesystem-scene hands/controllers are not ported. Trash restore/empty, Places and cross-application drag/drop remain
 incomplete relative to Qt. Accessibility/IME, bitmap shaping/bidi and broad
 fractional-scale coverage also remain incomplete.
 .SH FILES

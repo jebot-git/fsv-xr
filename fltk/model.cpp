@@ -227,13 +227,23 @@ Result scan(const Location &location,
         unreadable = true;
         return;
       }
-      std::vector<fs::directory_entry> sorted;
+      // Files and symlink targets can change while this directory is scanned.
+      // Never query live metadata in a sort comparator: changing answers break
+      // strict weak ordering and can make std::sort walk outside its range.
+      struct Candidate {
+        fs::directory_entry file;
+        bool directory = false, symlink = false;
+      };
+      std::vector<Candidate> sorted;
       while (it != end && !stop(cancel)) {
         if (sorted.size() + result.entries.size() >= limit) {
           truncated = true;
           break;
         }
-        sorted.push_back(*it);
+        Candidate candidate{*it};
+        candidate.directory = candidate.file.is_directory(ec);
+        candidate.symlink = candidate.file.is_symlink(ec);
+        sorted.push_back(std::move(candidate));
         it.increment(ec);
         if (ec) {
           unreadable = true;
@@ -241,12 +251,13 @@ Result scan(const Location &location,
         }
       }
       std::sort(sorted.begin(), sorted.end(), [](auto &a, auto &b) {
-        std::error_code ea, eb;
-        bool ad = a.is_directory(ea), bd = b.is_directory(eb);
-        return ad != bd ? ad > bd : a.path().filename() < b.path().filename();
+        return a.directory != b.directory
+                   ? a.directory > b.directory
+                   : a.file.path().filename() < b.file.path().filename();
       });
       std::vector<int> dirs;
-      for (auto &file : sorted) {
+      for (auto &candidate : sorted) {
+        auto &file = candidate.file;
         if (result.entries.size() >= limit) {
           truncated = true;
           break;
@@ -256,8 +267,8 @@ Result scan(const Location &location,
         e.name = file.path().filename().string();
         e.parent = parent;
         e.depth = depth;
-        e.directory = file.is_directory(ec);
-        e.symlink = file.is_symlink(ec);
+        e.directory = candidate.directory;
+        e.symlink = candidate.symlink;
         if (!e.directory) {
           auto n = file.file_size(ec);
           e.bytes = ec ? 0 : n;

@@ -7,12 +7,22 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 // All IPC waits stay off the FLTK thread. There is one device owner per login
 // bus.
 class DevicesClient {
   std::shared_ptr<GCancellable> cancel{g_cancellable_new(), g_object_unref};
   std::future<std::string> snapshot, operation;
+  // Promise-backed futures never wait for a worker during widget
+  // destruction. The worker owns its cancellation token and arguments,
+  // never the window.
+  template <class Work> static std::future<std::string> background(Work work) {
+    std::packaged_task<std::string()> task(std::move(work));
+    auto result = task.get_future();
+    std::thread(std::move(task)).detach();
+    return result;
+  }
   static std::string call(const char *method, GVariant *args,
                           const std::shared_ptr<GCancellable> &cancel) {
     g_variant_ref_sink(args);
@@ -48,9 +58,8 @@ public:
   ~DevicesClient() { g_cancellable_cancel(cancel.get()); }
   void refresh() {
     if (!snapshot.valid())
-      snapshot = std::async(std::launch::async, [c = cancel] {
-        return call("Snapshot", g_variant_new("()"), c);
-      });
+      snapshot = background(
+          [c = cancel] { return call("Snapshot", g_variant_new("()"), c); });
   }
   std::optional<std::string> result(bool action = false) {
     auto &future = action ? operation : snapshot;
@@ -66,7 +75,7 @@ public:
     auto params = g_variant_ref_sink(
         g_variant_new("(sss)", action.c_str(), device.c_str(), secret.c_str()));
     std::fill(secret.begin(), secret.end(), '\0');
-    operation = std::async(std::launch::async, [c = cancel, params] {
+    operation = background([c = cancel, params] {
       auto owned = std::shared_ptr<GVariant>(params, g_variant_unref);
       return call("Action", params, c);
     });
@@ -75,7 +84,7 @@ public:
   bool automount(bool enabled) {
     if (busy())
       return false;
-    operation = std::async(std::launch::async, [c = cancel, enabled] {
+    operation = background([c = cancel, enabled] {
       return call("SetAutomount", g_variant_new("(b)", enabled), c);
     });
     return true;
