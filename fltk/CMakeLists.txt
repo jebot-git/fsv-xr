@@ -114,3 +114,24 @@ install(FILES ../third_party/README.md ../third_party/gltf-dependencies.json
   ../third_party/LICENSE.native-graphics DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses)
 install(FILES ../third_party/cgltf/cgltf.h DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses/cgltf)
 install(FILES ../third_party/stb/stb_image.h DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses/stb)
+
+foreach(target fsvr fsv-interaction-test fsv-devices-ui-test fsv-model-ui-test fsv-navigation-test)
+  if(TARGET ${target})
+    target_sources(${target} PRIVATE domed.cpp)
+    target_link_libraries(${target} PRIVATE Threads::Threads)
+  endif()
+endforeach()
+
+if(BUILD_TESTING)
+  add_executable(fsv-stereo-ui-test stereo-ui-test.cpp spatial-view.cpp domed.cpp)
+  target_link_libraries(fsv-stereo-ui-test PRIVATE fsv-native-core fsv-gltf-ui Threads::Threads)
+  de_xr_desktop_menu(fsv-stereo-ui-test)
+endif()
+
+set(FSVR_STEREO_TEST_COMPOSITOR "" CACHE FILEPATH "DomeD compositor for isolated Wayland stereo QA")
+if(BUILD_TESTING AND FSVR_STEREO_TEST_COMPOSITOR AND XVFB_RUN AND DBUS_RUN_SESSION)
+  add_test(NAME in-window-stereo COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test-stereo-ui.py
+    $<TARGET_FILE:fsv-stereo-ui-test> ${FSVR_STEREO_TEST_COMPOSITOR})
+  set_tests_properties(in-window-stereo PROPERTIES TIMEOUT 75)
+endif()

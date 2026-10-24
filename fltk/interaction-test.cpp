@@ -75,18 +75,11 @@ void click(Browser &browser, int x, int y) {
 }
 void clickFolder(Browser &browser, SpatialView &view, int index) {
   view.make_current(); view.draw();
-  GLdouble model[16], projection[16], x, y, z;
-  GLint viewport[4];
-  glGetDoublev(GL_MODELVIEW_MATRIX, model);
-  glGetDoublev(GL_PROJECTION_MATRIX, projection);
-  glGetIntegerv(GL_VIEWPORT, viewport);
+  double x,y;
   auto &entry = browser.currentScene().entries.at(index);
-  require(gluProject(entry.center.x, entry.center.y + entry.extent.y / 2,
-                     entry.center.z, model, projection, viewport, &x, &y, &z),
-          "Folder projection failed");
-  auto scale = view.pixels_per_unit();
-  click(browser, view.x() + std::lround(x / scale),
-        view.y() + std::lround((viewport[3] - y) / scale));
+  require(view.projectPoint({entry.center.x, entry.center.y + entry.extent.y / 2,
+                             entry.center.z}, x, y), "Folder projection failed");
+  click(browser, view.x() + std::lround(x), view.y() + std::lround(y));
   require(view.selectedIndex() == index,
           "A spatial click must select the folder under the pointer");
 }

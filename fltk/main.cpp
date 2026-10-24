@@ -1,3 +1,4 @@
+#include "stereo-compositor.h"
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -63,6 +64,9 @@ public:
   }
 };
 class Browser : public dx::GpuWindow {
+  fsv_stereo::DomeMonitor domeMonitor;
+  fsv_stereo::Compositor stereo;
+  bool stereoEnabled = true, stereoPacked = false;
   Fl_Menu_Bar menu{0, 0, 1000, 30};
   Fl_Button upButton{8, 40, 64, 30, "Up"};
   Fl_Input path{82, 40, 560, 30};
@@ -328,6 +332,10 @@ class Browser : public dx::GpuWindow {
   }
   static void tick(void *p) {
     ((Browser *)p)->poll();
+    auto s = static_cast<Browser *>(p);
+    auto mode = s->domeMonitor.snapshot();
+    if ((mode.known && mode.xr && mode.stereoSupported) || s->stereoPacked)
+      s->redraw();
     Fl::repeat_timeout(.05, tick, p);
   }
   static void action(Fl_Widget *w, void *p) {
@@ -512,7 +520,8 @@ class Browser : public dx::GpuWindow {
         file << Json{{"sort", fsv::sortKeyName(sorting.key)},
                      {"descending", sorting.descending},
                      {"folders_first", sorting.foldersFirst},
-                     {"case_sensitive", sorting.caseSensitive}}
+                     {"case_sensitive", sorting.caseSensitive},
+                     {"stereo_3d", stereoEnabled}}
                     .dump(2);
         file.close();
         if (!file)
@@ -530,6 +539,7 @@ class Browser : public dx::GpuWindow {
         candidate.foldersFirst = value.value("folders_first", true);
         candidate.caseSensitive = value.value("case_sensitive", false);
         sorting = candidate;
+        stereoEnabled = value.value("stereo_3d", true);
       }
     } catch (const std::exception &) {
     }
@@ -607,6 +617,7 @@ class Browser : public dx::GpuWindow {
                  {"descending", sorting.descending},
                  {"folders_first", sorting.foldersFirst},
                  {"case_sensitive", sorting.caseSensitive},
+                     {"stereo_3d", stereoEnabled},
                  {"selected", entry() ? entry()->name : std::string()},
                  {"entries", names}}
                 .dump()
@@ -729,7 +740,8 @@ class Browser : public dx::GpuWindow {
 
 public:
   Browser() : dx::GpuWindow(1000, 700, "fsvr — FLTK OpenGL") {
-    xclass("org.fsvxr.fsvr");
+    mode(FL_RGB | FL_ALPHA | FL_DOUBLE | FL_DEPTH);
+    xclass("org.fsvxr.fsvr.Sbs");
     panels.end();
     end();
     add(status);
@@ -805,7 +817,9 @@ public:
       menu.add(item, 0, action, this);
     menu.add("Devices/Automount removable media", 0, action, this,
              FL_MENU_TOGGLE | FL_MENU_VALUE);
+    menu.add("View/Stereo 3D", 0, action, this, FL_MENU_TOGGLE | FL_MENU_VALUE);
     settings(false);
+    if (!stereoEnabled) menu.mode(menu.find_item("View/Stereo 3D") - menu.menu(), FL_MENU_TOGGLE);
     sortMenu(menu, "View/Sort by/");
     layoutChoice.add("MapV|TreeV|DiscV");
     layoutChoice.value(0);
@@ -870,7 +884,32 @@ public:
     desktop = std::make_unique<DesktopMenu>(*this, menu);
     Fl::add_timeout(.05, tick, this);
   }
+  void draw() override {
+    if (!context_valid()) stereo.abandon();
+    damage(FL_DAMAGE_ALL);
+    dx::GpuWindow::draw();
+    stereo.mode = domeMonitor.snapshot();
+    spatial.stereoPicking = false;
+    stereoPacked = false;
+    if (stereo.mode.known && stereo.mode.xr && stereo.mode.stereoSupported) {
+      stereoPacked = true;
+      stereo.X = spatial.x(); stereo.Y = spatial.y();
+      stereo.W = spatial.w(); stereo.H = spatial.h();
+      stereo.picking = [this](const fsv::gltf::Mat4 &vp,
+                              std::function<fsv::gltf::Vec3(float,float)> surface) {
+        spatial.stereoProjection = vp;
+        spatial.stereoSurface = std::move(surface); spatial.stereoPicking = true;
+      };
+      stereo.render = [this](const fsv::gltf::Mat4 &vp, float width, float height,
+                             float distance, int pw, int ph) {
+        spatial.renderEye(vp, width, height, distance, pw, ph);
+      };
+      // Even with depth disabled, pack identical UI/scene images for both eyes.
+      stereo.composite(w(), h(), pixel_w(), pixel_h(), stereoEnabled && spatial.visible());
+    }
+  }
   ~Browser() {
+    if (Fl_Gl_Window::context()) { make_current(); stereo.release(); }
     Fl::remove_timeout(tick, this);
     if (cancelled)
       *cancelled = true;
@@ -1044,7 +1083,13 @@ public:
       setLayout("tree");
     else if (name == "DiscV")
       setLayout("disc");
-    else if (name == "Spatial view") {
+    else if (name == "Stereo 3D") {
+      stereoEnabled = !stereoEnabled;
+      menu.mode(menu.find_item("View/Stereo 3D") - menu.menu(),
+                FL_MENU_TOGGLE | (stereoEnabled ? FL_MENU_VALUE : 0));
+      settings(true);
+      redraw();
+    } else if (name == "Spatial view") {
       if (spatial.visible()) {
         sidebarWidth = sidebar.w();
         spatial.hide();
@@ -1185,6 +1230,12 @@ public:
         });
       }
     }
+  }
+  Json stereoStatus() const {
+    return {{"enabled", stereoEnabled}, {"xr", stereo.mode.known && stereo.mode.xr},
+            {"supported", stereo.mode.stereoSupported}, {"curved", stereo.mode.hasCylinder},
+            {"tracked", stereo.mode.trackedEyes}, {"frames", stereo.stereoFrames},
+            {"error", stereo.error}, {"picking", spatial.stereoPicking}};
   }
   bool idle() const { return !scanning.valid() && !operation.valid(); }
   void smoke(const char *output) {

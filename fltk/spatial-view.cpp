@@ -6,10 +6,7 @@
 #include <cstring>
 #include <fstream>
 SpatialView::SpatialView(int x, int y, int w, int h)
-    : Fl_Gl_Window(x, y, w, h) {
-  mode(FL_RGB | FL_ALPHA | FL_DOUBLE | FL_DEPTH);
-  end();
-}
+    : Fl_Widget(x, y, w, h) {}
 SpatialView::~SpatialView() {
   if (context()) {
     make_current();
@@ -160,7 +157,11 @@ void SpatialView::textQuad(const fsv::Entry &e) {
   glEnable(GL_LIGHTING);
 }
 void SpatialView::draw() {
-  if (!context_valid())
+  glPushAttrib(GL_ALL_ATTRIB_BITS);
+  GLint matrixMode; glGetIntegerv(GL_MATRIX_MODE, &matrixMode);
+  glMatrixMode(GL_PROJECTION); glPushMatrix();
+  glMatrixMode(GL_MODELVIEW); glPushMatrix();
+  if (owner() && !owner()->context_valid())
     labels.clear();
   auto revision = dx::last + dx::font_name;
   if (theme != revision) {
@@ -170,8 +171,44 @@ void SpatialView::draw() {
   unsigned char r, g, b;
   Fl::get_color(FL_BACKGROUND2_COLOR, r, g, b);
   glClearColor(r / 255.f, g / 255.f, b / 255.f, 1);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   setup();
+  glViewport(int(x()*pixels_per_unit()), int((window()->h()-y()-h())*pixels_per_unit()), pixel_w(), pixel_h());
+  glEnable(GL_SCISSOR_TEST);
+  glScissor(int(x()*pixels_per_unit()), int((window()->h()-y()-h())*pixels_per_unit()), pixel_w(), pixel_h());
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  drawScene();
+  glDisable(GL_SCISSOR_TEST);
+  glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  glMatrixMode(GL_PROJECTION); glPopMatrix();
+  glMatrixMode(matrixMode); glPopAttrib();
+}
+bool SpatialView::projectPoint(fsv::Vec point, double &x, double &y) {
+  make_current(); setup();
+  double z;
+  if (!gluProject(point.x,point.y,point.z,model,projection,viewport,&x,&y,&z)) return false;
+  x /= pixels_per_unit(); y = h() - y/pixels_per_unit();
+  return z>=0 && z<=1;
+}
+void SpatialView::renderEye(const fsv::gltf::Mat4 &vp, float, float height,
+                            float distance, int pw, int ph) {
+  glViewport(0, 0, pw, ph);
+  unsigned char r,g,b; Fl::get_color(FL_BACKGROUND2_COLOR,r,g,b);
+  glClearColor(r/255.f,g/255.f,b/255.f,1);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glMatrixMode(GL_PROJECTION); glLoadMatrixf(vp.v.data());
+  glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+  glTranslatef(0,1.6f,-distance);
+  double d = std::hypot(170.,230.) / view.zoom;
+  double scale = height / (2 * d * std::tan(21 * 3.141592653589793 / 180));
+  glScaled(scale,scale,scale);
+  glTranslated(0,0,d);
+  gluLookAt(0,170/view.zoom,230/view.zoom,0,0,0,0,1,0);
+  glTranslated(view.panX,0,view.panZ);
+  glRotated(view.pitch,1,0,0); glRotated(view.yaw,0,1,0);
+  glGetDoublev(GL_MODELVIEW_MATRIX, stereoModel);
+  drawScene();
+}
+void SpatialView::drawScene() {
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_NORMALIZE);
   glEnable(GL_COLOR_MATERIAL);
@@ -250,8 +287,19 @@ int SpatialView::pickAt(int x, int y) {
   make_current();
   setup();
   double ox, oy, oz, tx, ty, tz;
+  if (stereoPicking && stereoSurface) {
+    auto point = stereoSurface(float(x)/w(), float(y)/h());
+    GLdouble identity[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}, p[16];
+    for (int i=0;i<16;++i) p[i]=stereoProjection[i];
+    GLint area[4]{0,0,w(),h()};
+    double sx,sy,sz;
+    gluProject(point.x,point.y,point.z,identity,p,area,&sx,&sy,&sz);
+    gluUnProject(sx,sy,0,stereoModel,p,area,&ox,&oy,&oz);
+    gluUnProject(sx,sy,1,stereoModel,p,area,&tx,&ty,&tz);
+    return fsv::pick(*scene,{ox,oy,oz},{tx-ox,ty-oy,tz-oz});
+  }
   double scale = pixels_per_unit();
-  // FLTK delivers events relative to this GL subwindow, not its parent.
+  // Convert viewport-local logical coordinates into framebuffer pixels.
   gluUnProject(x * scale, pixel_h() - y * scale, 0,
                model, projection, viewport, &ox, &oy, &oz);
   gluUnProject(x * scale, pixel_h() - y * scale, 1,
@@ -272,8 +320,8 @@ void SpatialView::focusSelection() {
 int SpatialView::handle(int e) {
   if (e == FL_PUSH) {
     take_focus();
-    downX = Fl::event_x();
-    downY = Fl::event_y();
+    downX = Fl::event_x() - x();
+    downY = Fl::event_y() - y();
     button = Fl::event_button();
     dragged = false;
     if (button == 1) {
@@ -286,7 +334,7 @@ int SpatialView::handle(int e) {
     return 1;
   }
   if (e == FL_DRAG) {
-    int dx = Fl::event_x() - downX, dy = Fl::event_y() - downY;
+    int dx = Fl::event_x() - x() - downX, dy = Fl::event_y() - y() - downY;
     dragged = dragged || std::abs(dx) + std::abs(dy) > 2;
     if (button == 3) {
       view.yaw += dx * .5;
@@ -295,13 +343,13 @@ int SpatialView::handle(int e) {
       view.panX += dx * .35 / view.zoom;
       view.panZ += dy * .35 / view.zoom;
     }
-    downX = Fl::event_x();
-    downY = Fl::event_y();
+    downX = Fl::event_x() - x();
+    downY = Fl::event_y() - y();
     redraw();
     return 1;
   }
   if (e == FL_RELEASE && button == 3 && !dragged) {
-    selected = pickAt(Fl::event_x(), Fl::event_y());
+    selected = pickAt(Fl::event_x() - x(), Fl::event_y() - y());
     if (selectionChanged)
       selectionChanged(selected);
     if (contextRequested)
@@ -330,14 +378,14 @@ int SpatialView::handle(int e) {
       return 1;
     }
   }
-  return Fl_Gl_Window::handle(e);
+  return Fl_Widget::handle(e);
 }
 bool SpatialView::snapshot(const std::filesystem::path &path) {
   make_current();
   draw();
   std::vector<unsigned char> pixels(size_t(pixel_w()) * pixel_h() * 3);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadPixels(0, 0, pixel_w(), pixel_h(), GL_RGB, GL_UNSIGNED_BYTE,
+  glReadPixels(int(x()*pixels_per_unit()), int((window()->h()-y()-h())*pixels_per_unit()), pixel_w(), pixel_h(), GL_RGB, GL_UNSIGNED_BYTE,
                pixels.data());
   std::ofstream file(path, std::ios::binary);
   file << "P6\n" << pixel_w() << " " << pixel_h() << "\n255\n";
