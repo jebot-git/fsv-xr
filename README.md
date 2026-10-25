@@ -105,6 +105,9 @@ or choose **File → Live glTF preview**, to open the GPU preview. Drag to orbit
 use the wheel to zoom, middle-drag or Shift-drag to pan, and press R to reset.
 Orbit and animation playback can be paused; the animation selector chooses a clip.
 DomeD receives the preview's universal menu; other desktops get a local menu.
+The model viewport renders into an offscreen GPU framebuffer and is composited
+into the same FLTK surface as the controls. DomeD's retained XR GPU frames thus
+include the model without relying on a separate GL subwindow.
 
 **Open in XR** renders the selected object as a separate stereoscopic overlay
 above the existing DomeD session. It requires a connected headset and a runtime

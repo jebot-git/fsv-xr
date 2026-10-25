@@ -212,3 +212,17 @@ if(BUILD_TESTING)
     set_tests_properties(archive-browser-ui PROPERTIES TIMEOUT 45)
   endif()
 endif()
+
+if(BUILD_TESTING)
+  add_executable(fsv-model-preview-test model-preview-test.cpp)
+  target_link_libraries(fsv-model-preview-test PRIVATE fsv-gltf-ui)
+  de_xr_desktop_menu(fsv-model-preview-test)
+  if(XVFB_RUN AND DBUS_RUN_SESSION)
+    add_test(NAME model-preview-window-frames COMMAND ${CMAKE_COMMAND} -E env
+      FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+      XR_RUNTIME_JSON=/nonexistent/fsvr-preview-test-runtime.json
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+      ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-model-preview-test>)
+    set_tests_properties(model-preview-window-frames PROPERTIES TIMEOUT 30)
+  endif()
+endif()

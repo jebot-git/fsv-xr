@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#define GL_GLEXT_PROTOTYPES
 #include "model-preview.h"
+#include <GL/glext.h>
 
 #include <FL/fl_utf8.h>
 #include <fcntl.h>
@@ -23,30 +25,71 @@ std::string menuText(std::string value) {
   return value;
 }
 } // namespace
-ModelView::ModelView(int x, int y, int w, int h) : Fl_Gl_Window(x, y, w, h) {
-  mode(FL_RGB | FL_ALPHA | FL_DOUBLE | FL_DEPTH | FL_OPENGL3);
-  end();
+ModelView::ModelView(int x, int y, int w, int h) : Fl_Widget(x, y, w, h) {}
+Fl_Gl_Window *ModelView::owner() const {
+  return dynamic_cast<Fl_Gl_Window *>(window());
 }
-ModelView::~ModelView() {
-  if (context()) {
-    make_current();
-  } else
+void ModelView::make_current() {
+  if (auto parent = owner()) parent->make_current();
+}
+void ModelView::releaseTarget() {
+  if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
+  if (color) glDeleteTextures(1, &color);
+  if (depth) glDeleteRenderbuffers(1, &depth);
+  framebuffer = color = depth = 0;
+  targetWidth = targetHeight = 0;
+}
+void ModelView::releaseContext() {
+  auto parent = owner();
+  if (parent && parent->context() && parent->context() == renderContext) {
+    parent->make_current();
+    renderer.clear(true);
+    releaseTarget();
+  } else {
     renderer.abandon();
+    framebuffer = color = depth = 0;
+    targetWidth = targetHeight = 0;
+  }
+  renderContext = nullptr;
+}
+ModelView::~ModelView() { releaseContext(); }
+void ModelView::allocateTarget(int width, int height) {
+  if (framebuffer && width == targetWidth && height == targetHeight) return;
+  releaseTarget();
+  glGenFramebuffers(1, &framebuffer);
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+  glGenTextures(1, &color);
+  glBindTexture(GL_TEXTURE_2D, color);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+  glGenRenderbuffers(1, &depth);
+  glBindRenderbuffer(GL_RENDERBUFFER, depth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    throw std::runtime_error("Cannot allocate model preview framebuffer");
+  targetWidth = width; targetHeight = height;
+}
+void ModelView::redrawScene() {
+  // A regular widget invalidates the same surface that DomeD sends to XR.
+  redraw();
 }
 void ModelView::setModel(std::shared_ptr<const Model> value) {
   if (value != model) {
-    if(!value) { if(context()) { make_current(); renderer.clear(); } else renderer.abandon(); }
+    if (!value) releaseContext();
     model = std::move(value);
     error.clear();
     seconds = 0;
-    redraw();
+    redrawScene();
   }
 }
 void ModelView::reset() {
   yaw = pitch = panX = panY = 0;
   distance = 1.8f;
   error.clear();
-  redraw();
+  redrawScene();
 }
 void ModelView::advance(double dt) {
   if (!visible_r() || !model)
@@ -56,34 +99,72 @@ void ModelView::advance(double dt) {
   if (orbit)
     yaw += dt * .18;
   if (orbit || (playing && !model->animations.empty()))
-    redraw();
+    redrawScene();
 }
 void ModelView::draw() {
-  if (!context_valid()) {
+  auto parent = owner();
+  if (!parent) return;
+  if (renderContext != parent->context() || !parent->context_valid()) {
     renderer.abandon();
-    context_valid(1);
+    framebuffer = color = depth = 0;
+    targetWidth = targetHeight = 0;
+    renderContext = parent->context();
   }
+  const double scale = parent->pixels_per_unit();
+  const int width = std::max(1, int(std::lround(w() * scale)));
+  const int height = std::max(1, int(std::lround(h() * scale)));
+  GLint drawBuffer, readBuffer, program, vao, arrayBuffer, renderbuffer, unpackAlignment;
+  GLint samplers[5];
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawBuffer);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readBuffer);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+  glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+  glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackAlignment);
+  for (int unit = 0; unit < 5; ++unit)
+    glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &samplers[unit]);
+  glPushAttrib(GL_ALL_ATTRIB_BITS);
   unsigned char r, g, b;
   Fl::get_color(FL_BACKGROUND2_COLOR, r, g, b);
-  if (!model || !error.empty()) {
-    glViewport(0, 0, pixel_w(), pixel_h());
+  try {
+    allocateTarget(width, height);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, width, height);
     glClearColor(r / 255.f, g / 255.f, b / 255.f, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    return;
-  }
-  try {
-    renderer.prepare(model, seconds, animation);
-    float up = .45f, right = std::atan(std::tan(up) * float(pixel_w()) /
-                                       std::max(1, pixel_h()));
-    Pose camera{{panX, panY, distance}, {}, 1};
-    auto vp = perspective(-right, right, -up, up) * matrix(inverse(camera));
-    auto root = trs({}, axis(yaw, {0, 1, 0}) * axis(pitch, {1, 0, 0})) *
-                model->bounds.fit();
-    renderer.draw(vp, root, camera.position, pixel_w(), pixel_h(),
-                  {r / 255.f, g / 255.f, b / 255.f, 1});
+    if (model && error.empty()) {
+      renderer.prepare(model, seconds, animation);
+      float up = .45f, right = std::atan(std::tan(up) * float(width) / height);
+      Pose camera{{panX, panY, distance}, {}, 1};
+      auto vp = perspective(-right, right, -up, up) * matrix(inverse(camera));
+      auto root = trs({}, axis(yaw, {0, 1, 0}) * axis(pitch, {1, 0, 0})) * model->bounds.fit();
+      renderer.draw(vp, root, camera.position, width, height,
+                    {r / 255.f, g / 255.f, b / 255.f, 1});
+    }
+    // Composite entirely on the GPU into the containing FLTK surface. A native
+    // GL subwindow can be absent from retained XR DMA-BUF window frames.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawBuffer);
+    glDisable(GL_SCISSOR_TEST);
+    int left = int(std::lround(x() * scale));
+    int bottom = parent->pixel_h() - int(std::lround((y() + h()) * scale));
+    glBlitFramebuffer(0, 0, width, height, left, bottom, left + width, bottom + height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
   } catch (const std::exception &e) {
     error = e.what();
   }
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawBuffer);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, readBuffer);
+  glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+  glUseProgram(program);
+  glBindVertexArray(vao);
+  glBindBuffer(GL_ARRAY_BUFFER, arrayBuffer);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
+  for (int unit = 0; unit < 5; ++unit)
+    glBindSampler(unit, samplers[unit]);
+  glPopAttrib();
 }
 int ModelView::handle(int event) {
   if (event == FL_PUSH) {
@@ -105,7 +186,7 @@ int ModelView::handle(int event) {
       yaw += dx * .01f;
       pitch = std::clamp(pitch + dy * .01f, -1.5f, 1.5f);
     }
-    redraw();
+    redrawScene();
     return 1;
   }
   if (event == FL_RELEASE) {
@@ -115,14 +196,14 @@ int ModelView::handle(int event) {
   if (event == FL_MOUSEWHEEL) {
     distance =
         std::clamp(distance * std::exp(Fl::event_dy() * .12f), .15f, 50.f);
-    redraw();
+    redrawScene();
     return 1;
   }
   if ((event == FL_KEYDOWN || event == FL_SHORTCUT) && Fl::event_key() == 'r') {
     reset();
     return 1;
   }
-  return Fl_Gl_Window::handle(event);
+  return Fl_Widget::handle(event);
 }
 void ModelPreview::tick(void *p) {
   auto self = static_cast<ModelPreview *>(p);
@@ -152,7 +233,7 @@ ModelPreview::ModelPreview()
         auto self = static_cast<ModelPreview *>(p);
         self->view.animation = static_cast<Fl_Choice *>(w)->value();
         self->view.seconds = 0;
-        self->view.redraw();
+        self->view.redrawScene();
       },
       this);
   info.wrap(true);
@@ -173,6 +254,10 @@ int ModelPreview::handle(int event) {
   if (event == FL_SHORTCUT && !menu.visible() && !Fl::modal() && menu.handle(event))
     return 1;
   return dx::GpuWindow::handle(event);
+}
+void ModelPreview::hide() {
+  view.releaseContext();
+  dx::GpuWindow::hide();
 }
 ModelPreview::~ModelPreview() {
   Fl::remove_timeout(tick, this);

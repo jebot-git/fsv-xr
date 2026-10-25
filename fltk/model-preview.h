@@ -12,8 +12,14 @@
 #include "gpu-window.h"
 #include "model-loader.h"
 #include "model-xr.h"
-class ModelView : public Fl_Gl_Window {
+class ModelView : public Fl_Widget {
   fsv::gltf::Renderer renderer;
+  void *renderContext = nullptr;
+  GLuint framebuffer = 0, color = 0, depth = 0;
+  int targetWidth = 0, targetHeight = 0;
+  Fl_Gl_Window *owner() const;
+  void releaseTarget();
+  void allocateTarget(int, int);
   std::shared_ptr<const fsv::gltf::Model> model;
   int downX = 0, downY = 0, button = 0;
   float yaw = 0, pitch = 0, distance = 1.8f, panX = 0, panY = 0;
@@ -29,6 +35,9 @@ public:
   const std::shared_ptr<const fsv::gltf::Model> &asset() const { return model; }
   void advance(double dt);
   void reset();
+  void redrawScene();
+  void make_current();
+  void releaseContext();
   const std::string &failure() const { return error; }
   void draw() override;
   int handle(int) override;
@@ -64,6 +73,7 @@ class ModelPreview : public dx::GpuWindow {
 public:
   ModelPreview();
   ~ModelPreview();
+  void hide() override;
   void open(const std::filesystem::path &, bool showPreview = true,
             bool inXR = false);
   void command(const std::string &);

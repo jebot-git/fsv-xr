@@ -15,7 +15,7 @@ public:
   Renderer(const Renderer &) = delete;
   Renderer &operator=(const Renderer &) = delete;
   void abandon();
-  void clear();
+  void clear(bool all = false);
   void prepare(std::shared_ptr<const Model>, double seconds, int animation = 0);
   void draw(const Mat4 &viewProjection, const Mat4 &root, Vec3 eye, int width,
             int height,

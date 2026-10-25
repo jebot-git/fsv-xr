@@ -175,6 +175,9 @@ struct Renderer::Impl {
     images.clear();
     samplers.clear();
     model.reset();
+    frame = {};
+    seconds = -1;
+    animation = -2;
     uploaded = 0;
     if (all) {
       destroy(lines);
@@ -229,7 +232,7 @@ struct Renderer::Impl {
 };
 Renderer::Renderer() : impl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() = default;
-void Renderer::clear() { impl->clear(); }
+void Renderer::clear(bool all) { impl->clear(all); }
 void Renderer::abandon() {
   impl->owned = false;
   impl = std::make_unique<Impl>();
