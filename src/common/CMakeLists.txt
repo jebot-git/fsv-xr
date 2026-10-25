@@ -1,0 +1,7 @@
+find_package(PNG REQUIRED)
+find_package(JPEG REQUIRED)
+find_package(GIF REQUIRED)
+add_library(fsv-thumbnail-decode STATIC thumbnail-decode.c)
+target_include_directories(fsv-thumbnail-decode PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(fsv-thumbnail-decode PUBLIC PNG::PNG JPEG::JPEG GIF::GIF)
+target_compile_options(fsv-thumbnail-decode PRIVATE -Wall -Wextra -Wpedantic)

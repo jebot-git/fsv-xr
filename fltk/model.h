@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #pragma once
+#include "archive-ops.h"
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -40,8 +41,9 @@ struct Result {
 };
 struct Location {
   fs::path path;
-  std::string member;
+  std::string member = "";
   bool archive = false;
+  std::string password = "";
   std::string display() const {
     return path.string() + (archive ? "!/" + member : "");
   }
@@ -59,7 +61,8 @@ Result scan(const Location &, const std::shared_ptr<std::atomic_bool> &cancel,
 Scene arrange(std::vector<Entry>, const std::string &layout);
 bool archiveSupported(const fs::path &);
 std::string safeMember(const std::string &);
-fs::path materialize(const Location &, const fs::path &temporary);
+Location locationArgument(const std::string &);
+fs::path materialize(const Location &, const fs::path &temporary, const ArchiveOptions & = {});
 fs::path extract(const fs::path &archive);
 void compress(const fs::path &source, const fs::path &destination);
 int pick(const Scene &, Vec origin, Vec direction);

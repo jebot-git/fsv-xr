@@ -229,6 +229,7 @@ struct Renderer::Impl {
 };
 Renderer::Renderer() : impl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() = default;
+void Renderer::clear() { impl->clear(); }
 void Renderer::abandon() {
   impl->owned = false;
   impl = std::make_unique<Impl>();

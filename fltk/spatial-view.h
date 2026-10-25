@@ -2,6 +2,7 @@
 #pragma once
 #include "appearance.h"
 #include "model.h"
+#include "thumbnails.h"
 #include <FL/Fl_Gl_Window.H>
 #include "object-math.h"
 #include <FL/Fl_Shared_Image.H>
@@ -20,6 +21,8 @@ class SpatialView : public Fl_Widget {
   int viewport[4]{};
   std::string theme;
   std::map<std::string, GLuint> labels;
+  fsv::Thumbnails thumbnails;
+  std::map<std::filesystem::path,std::string> pendingLabels;
   void setup();
   void drawScene();
   void cube(const fsv::Entry &, bool root = false);
@@ -47,6 +50,9 @@ public:
   ~SpatialView();
   void setScene(const fsv::Scene *value) {
     scene = value;
+    selected = -1;
+    thumbnails.clear();
+    pendingLabels.clear();
     invalidateLabels();
     redraw();
   }
@@ -56,6 +62,7 @@ public:
   }
   int selectedIndex() const { return selected; }
   void invalidateLabels();
+  void pollThumbnails();
   // Coordinates are local FLTK units within this viewport.
   int pickAt(int x, int y);
   bool projectPoint(fsv::Vec point, double &x, double &y);

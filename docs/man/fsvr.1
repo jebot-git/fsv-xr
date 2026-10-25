@@ -92,6 +92,25 @@ update live with the required FLTK patches. Native glTF overlays support motion
 controllers; standalone filesystem-scene hands/controllers are not ported. Trash restore/empty, Places and cross-application drag/drop remain
 incomplete relative to Qt. Accessibility/IME, bitmap shaping/bidi and broad
 fractional-scale coverage also remain incomplete.
+.SH ARCHIVES AND PREVIEWS
+All libarchive readers/filters are enabled. Browse or extract ZIP, 7-Zip, tar,
+CPIO, ar/deb, RPM, ISO, XAR, WARC, RAR, CAB, LHA and compressed streams as supported
+by the selected runtime. Compress provides a format chooser; ZIP creation can
+use an AES-256 password. Extract to chooses a new destination; Extract selected
+limits extraction to a member/subtree. Operations report progress and can cancel.
+Existing destinations, traversal, escaping links and special files are refused.
+Reader/writer errors remove partial output. Relative links, normal permissions
+and timestamps are preserved. Password prompts do not write passwords to disk.
+.PP
+Image cards use bounded background thumbnails rather than full-resolution image
+loads. Folder changes cancel queued work and drop stale results. JPEG downscales
+in the decoder; PNG/GIF use scanlines and BMP samples rows. The optional Qt
+provider also bounds image and thumbnail-cache decoding. Model textures retain
+separate explicit resource limits; hidden passive models follow selection.
+.PP
+fsvr-dome-default --archives-only selects fsvr for Dome archive handling without
+changing folder/trash choices or other desktop sessions. Multiple local file URLs
+open separate tabs. New DomeD settings rows appear in the next session.
 .SH FILES
 .TP
 .I $XDG_CONFIG_HOME/fsvr/fltk.json
@@ -111,8 +130,9 @@ Its --smoke-test is a timed diagnostic flag, unlike the FLTK filename option.
 See the repository README for Qt-specific controls and filesystem behavior.
 .SH INSTALLATION
 Build Release as a regular user, using the matching patched FLTK 1.4.5 runtime.
-The FLTK CMake target currently installs its executable only. Stage this manual
-explicitly; Qt desktop entries and fsvr-dome-default belong to the Qt install.
+The FLTK CMake target installs its executable, desktop entry, archive MIME
+definitions, fsvr-dome-default helper, manual and dependency notices.
+A private libarchive 3.8.10+ can be staged under /usr/local/lib/fsvr.
 Review staged files before privileged system installation.
 .SH EXAMPLES
 .nf
@@ -123,3 +143,7 @@ fsvr --layout disc /path/to/archive.zip
 .SH SEE ALSO
 .BR dome\-compositor (1),
 .BR qimgvr (1)
+
+.SH KEYBOARD
+Ctrl+W closes the current tab. Super+W closes the focused browser or model-preview
+window. DomeD leaves Ctrl+W to applications and uses Super+W for window closing.

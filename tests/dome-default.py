@@ -28,5 +28,20 @@ class DefaultsTest(unittest.TestCase):
             self.assertEqual(global_config.read_text(), kde_config.read_text())
             self.assertIn("dolphin", global_config.read_text())
 
+    def test_archive_only_preserves_folder_choice_comments_and_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "dome-mimeapps.list"
+            config.write_text("# User comment\n[Default Applications]\ninode/directory=custom.desktop;\napplication/zip=other.desktop;\n[Other]\nkeep=literal\n")
+            module.configure(root, archives_only=True)
+            result = config.read_text()
+            self.assertIn("# User comment", result)
+            self.assertIn("inode/directory=custom.desktop;", result)
+            self.assertIn("[Other]\nkeep=literal", result)
+            for mime in module.archive_types():
+                self.assertIn(mime + "=org.fsvxr.fsvr.desktop;", result)
+            module.configure(root, archives_only=True)
+            self.assertEqual(config.read_text(), result)
+
 if __name__ == "__main__":
     unittest.main()

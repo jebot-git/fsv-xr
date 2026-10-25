@@ -17,23 +17,6 @@
 #include <unistd.h>
 namespace fsv {
 namespace {
-struct Reader {
-  archive *a = archive_read_new();
-  Reader(const fs::path &p) {
-    archive_read_support_filter_all(a);
-    archive_read_support_format_all(a);
-    if (archive_read_open_filename(a, p.c_str(), 65536) != ARCHIVE_OK) {
-      auto error = std::string(archive_error_string(a));
-      archive_read_free(a);
-      a = nullptr;
-      throw std::runtime_error(error);
-    }
-  }
-  ~Reader() {
-    if (a)
-      archive_read_free(a);
-  }
-};
 bool stop(const std::shared_ptr<std::atomic_bool> &c) { return c && c->load(); }
 std::string contentType(const Entry &e) {
   if (e.directory)
@@ -182,22 +165,12 @@ std::vector<Entry> sortEntries(std::vector<Entry> entries,
   }
   return result;
 }
-bool archiveSupported(const fs::path &p) {
-  auto s = p.filename().string();
-  std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-  for (auto ext : {".zip", ".tar", ".tgz", ".tar.gz", ".tar.xz", ".tar.bz2",
-                   ".tar.zst", ".7z"})
-    if (s.size() > strlen(ext) &&
-        s.compare(s.size() - strlen(ext), strlen(ext), ext) == 0)
-      return true;
-  return false;
-}
 std::string safeMember(const std::string &raw) {
   if (raw.empty() || raw.size() > 4096 || raw.find('\0') != std::string::npos ||
       raw.find('\\') != std::string::npos)
     throw std::runtime_error("Invalid archive member");
   fs::path p(raw);
-  if (p.is_absolute() || p.has_root_name())
+  if (p.is_absolute() || p.has_root_name() || (raw.size() > 1 && std::isalpha(static_cast<unsigned char>(raw[0])) && raw[1] == ':'))
     throw std::runtime_error("Absolute archive member blocked");
   for (auto &part : p)
     if (part == "..")
@@ -299,23 +272,17 @@ Result scan(const Location &location,
     };
     visit(location.path, -1, 0);
   } else {
-    Reader reader(location.path);
+    ArchiveReader reader(location.path, location.password);
     std::map<std::string, Entry> index;
     archive_entry *item = nullptr;
     size_t bytes = 0;
     while (!stop(cancel) &&
-           archive_read_next_header(reader.a, &item) == ARCHIVE_OK) {
-      const char *name = archive_entry_pathname_utf8(item);
-      if (!name)
-        name = archive_entry_pathname(item);
-      if (!name)
-        continue;
+           reader.next(item)) {
       std::string member;
-      try {
-        member = safeMember(name);
-      } catch (...) {
+      try { member = reader.member(item); }
+      catch (const std::exception &) {
         unreadable = true;
-        archive_read_data_skip(reader.a);
+        reader.skip();
         continue;
       }
       if (member.empty())
@@ -326,9 +293,9 @@ Result scan(const Location &location,
         break;
       }
       auto type = archive_entry_filetype(item);
-      if (type != AE_IFREG && type != AE_IFDIR) {
+      if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK) {
         unreadable = true;
-        archive_read_data_skip(reader.a);
+        reader.skip();
         continue;
       }
       Entry e;
@@ -336,6 +303,7 @@ Result scan(const Location &location,
       e.member = member;
       e.name = fs::path(member).filename().string();
       e.directory = type == AE_IFDIR;
+      e.symlink = type == AE_IFLNK;
       e.bytes =
           e.directory ? 0 : std::max<int64_t>(0, archive_entry_size(item));
       if (archive_entry_mtime_is_set(item))
@@ -363,7 +331,7 @@ Result scan(const Location &location,
         }
         parent = parent.parent_path();
       }
-      archive_read_data_skip(reader.a);
+      reader.skip();
     }
     std::string prefix =
         location.member.empty() ? "" : safeMember(location.member) + "/";
@@ -666,22 +634,39 @@ int pick(const Scene &scene, Vec origin, Vec direction) {
   }
   return selected;
 }
-fs::path materialize(const Location &location, const fs::path &temporary) {
+Location locationArgument(const std::string &argument) {
+  if (argument.rfind("archive:", 0) == 0) {
+    auto split=argument.find('#');
+    auto encoded=argument.substr(8,split==std::string::npos?std::string::npos:split-8);
+    gchar *path=g_uri_unescape_string(encoded.c_str(),nullptr);
+    gchar *member=split==std::string::npos?g_strdup(""):g_uri_unescape_string(argument.substr(split+1).c_str(),nullptr);
+    if(!path || !member){g_free(path);g_free(member);throw std::runtime_error("Invalid archive URL");}
+    Location result{path,member,true};g_free(path);g_free(member);
+    result.member=safeMember(result.member);result.path=fs::absolute(result.path).lexically_normal();return result;
+  }
+  if (argument.rfind("file:", 0) == 0) {
+    gchar *host=nullptr;GError *error=nullptr;
+    gchar *path=g_filename_from_uri(argument.c_str(),&host,&error);
+    bool local=!host || !*host || g_ascii_strcasecmp(host,"localhost")==0;
+    g_free(host);
+    if(!path || !local){g_free(path);if(error)g_error_free(error);throw std::runtime_error("Only valid local file URLs can be opened");}
+    Location result{path};g_free(path);return result;
+  }
+  auto split=argument.find("!/");
+  std::error_code ec;
+  if(split!=std::string::npos && !fs::exists(argument,ec))return {fs::absolute(argument.substr(0,split)).lexically_normal(),safeMember(argument.substr(split+2)),true};
+  return {argument};
+}
+fs::path materialize(const Location &location, const fs::path &temporary, const ArchiveOptions &options) {
   auto targetMember = safeMember(location.member);
   if (targetMember.empty())
     throw std::runtime_error("Choose an archive file");
-  Reader reader(location.path);
+  ArchiveReader reader(location.path, options.password.empty() ? location.password : options.password);
   archive_entry *item;
-  while (archive_read_next_header(reader.a, &item) == ARCHIVE_OK) {
-    auto raw = archive_entry_pathname(item);
-    if (!raw)
-      continue;
+  while (reader.next(item)) {
     std::string member;
-    try {
-      member = safeMember(raw);
-    } catch (...) {
-      continue;
-    }
+    try { member = reader.member(item); }
+    catch (const std::exception &) { reader.skip(); continue; }
     if (member != targetMember)
       continue;
     if (archive_entry_filetype(item) != AE_IFREG ||
@@ -699,12 +684,14 @@ fs::path materialize(const Location &location, const fs::path &temporary) {
     char buffer[65536];
     try {
       for (;;) {
-        auto n = archive_read_data(reader.a, buffer, sizeof(buffer));
+        if (options.cancel && options.cancel->load()) throw std::runtime_error("Archive operation cancelled");
+        auto n = reader.read(buffer, sizeof(buffer));
         if (n < 0)
           throw std::runtime_error("Cannot read archive member");
         if (!n)
           break;
         total += n;
+        if (options.progress) options.progress(total, 1, member);
         if (total > 64 * 1024 * 1024)
           throw std::runtime_error("Archive preview exceeds 64 MiB");
         size_t sent = 0;
@@ -724,159 +711,5 @@ fs::path materialize(const Location &location, const fs::path &temporary) {
     }
   }
   throw std::runtime_error("Archive member disappeared");
-}
-fs::path extract(const fs::path &source) {
-  auto name = source.stem().string();
-  if (source.extension() == ".gz" || source.extension() == ".xz" ||
-      source.extension() == ".bz2" || source.extension() == ".zst")
-    name = fs::path(name).stem().string();
-  auto destination = source.parent_path() / (name + ".extracted");
-  if (!fs::create_directory(destination))
-    throw std::runtime_error("Extraction destination already exists");
-  chmod(destination.c_str(), 0700);
-  try {
-    Reader reader(source);
-    archive_entry *item;
-    uint64_t total = 0;
-    size_t count = 0;
-    while (archive_read_next_header(reader.a, &item) == ARCHIVE_OK) {
-      if (++count > 32768)
-        throw std::runtime_error("Archive entry limit exceeded");
-      const char *raw = archive_entry_pathname(item);
-      auto member = safeMember(raw ? raw : "");
-      if (member.empty())
-        continue;
-      auto type = archive_entry_filetype(item);
-      if ((type != AE_IFREG && type != AE_IFDIR) ||
-          archive_entry_hardlink(item) || archive_entry_symlink(item))
-        throw std::runtime_error("Archive links and special files are blocked");
-      fs::path current = destination;
-      auto relative = fs::path(member);
-      for (auto it = relative.begin(); it != relative.end(); ++it) {
-        auto next = it;
-        ++next;
-        current /= *it;
-        if (next != relative.end() || type == AE_IFDIR) {
-          std::error_code ec;
-          auto status = fs::symlink_status(current, ec);
-          if (fs::exists(status)) {
-            if (!fs::is_directory(status) || fs::is_symlink(status))
-              throw std::runtime_error("Unsafe extraction parent");
-          } else if (!fs::create_directory(current))
-            throw std::runtime_error("Cannot create extraction folder");
-          chmod(current.c_str(), 0700);
-        }
-      }
-      if (type == AE_IFDIR)
-        continue;
-      int fd = open(current.c_str(),
-                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-      if (fd < 0)
-        throw std::runtime_error("Extraction refuses to overwrite");
-      char buffer[65536];
-      try {
-        for (;;) {
-          auto n = archive_read_data(reader.a, buffer, sizeof(buffer));
-          if (n < 0)
-            throw std::runtime_error("Archive read failed");
-          if (!n)
-            break;
-          total += n;
-          if (total > 10ull * 1024 * 1024 * 1024)
-            throw std::runtime_error("Extraction exceeds 10 GiB");
-          size_t done = 0;
-          while (done < size_t(n)) {
-            auto w = write(fd, buffer + done, n - done);
-            if (w <= 0)
-              throw std::runtime_error("Extraction write failed");
-            done += w;
-          }
-        }
-        close(fd);
-      } catch (...) {
-        close(fd);
-        throw;
-      }
-    }
-    return destination;
-  } catch (...) {
-    fs::remove_all(destination);
-    throw;
-  }
-}
-void compress(const fs::path &source, const fs::path &destination) {
-  if (fs::exists(destination))
-    throw std::runtime_error("Archive destination exists");
-  if (fs::is_directory(source)) {
-    auto rel = fs::weakly_canonical(destination)
-                   .lexically_relative(fs::canonical(source));
-    if (!rel.empty() && *rel.begin() != "..")
-      throw std::runtime_error(
-          "Archive cannot be written inside its source folder");
-  }
-  archive *writer = archive_write_new();
-  if (destination.extension() == ".zip")
-    archive_write_set_format_zip(writer);
-  else {
-    archive_write_set_format_pax_restricted(writer);
-    if (destination.extension() == ".gz" || destination.extension() == ".tgz")
-      archive_write_add_filter_gzip(writer);
-    else if (destination.extension() == ".xz")
-      archive_write_add_filter_xz(writer);
-    else if (destination.extension() == ".zst")
-      archive_write_add_filter_zstd(writer);
-  }
-  int fd =
-      open(destination.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (fd < 0) {
-    archive_write_free(writer);
-    throw std::runtime_error("Cannot create archive");
-  }
-  try {
-    if (archive_write_open_fd(writer, fd) != ARCHIVE_OK)
-      throw std::runtime_error("Cannot open archive writer");
-    std::function<void(fs::path)> addFile = [&](fs::path path) {
-      auto status = fs::symlink_status(path);
-      if (fs::is_symlink(status) ||
-          (!fs::is_regular_file(status) && !fs::is_directory(status)))
-        return;
-      auto entry = archive_entry_new();
-      auto name =
-          path.lexically_relative(source.parent_path()).generic_string();
-      archive_entry_set_pathname(entry, name.c_str());
-      bool directory = fs::is_directory(status);
-      archive_entry_set_filetype(entry, directory ? AE_IFDIR : AE_IFREG);
-      archive_entry_set_perm(entry, directory ? 0755 : 0644);
-      archive_entry_set_size(entry, directory ? 0 : fs::file_size(path));
-      int result = archive_write_header(writer, entry);
-      archive_entry_free(entry);
-      if (result != ARCHIVE_OK)
-        throw std::runtime_error("Archive header failed");
-      if (directory) {
-        for (auto &child : fs::directory_iterator(path))
-          addFile(child.path());
-      } else {
-        std::ifstream input(path, std::ios::binary);
-        char buffer[65536];
-        while (input) {
-          input.read(buffer, sizeof(buffer));
-          auto n = input.gcount();
-          if (n && archive_write_data(writer, buffer, n) != n)
-            throw std::runtime_error("Archive write failed");
-        }
-        if (!input.eof())
-          throw std::runtime_error("Source read failed");
-      }
-    };
-    addFile(source);
-    archive_write_close(writer);
-    archive_write_free(writer);
-    close(fd);
-  } catch (...) {
-    archive_write_free(writer);
-    close(fd);
-    fs::remove(destination);
-    throw;
-  }
 }
 } // namespace fsv

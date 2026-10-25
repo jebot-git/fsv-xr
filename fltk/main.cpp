@@ -3,6 +3,8 @@
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Check_Button.H>
+#include <FL/Fl_Return_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
@@ -102,6 +104,13 @@ class Browser : public dx::GpuWindow {
   std::shared_ptr<std::atomic_bool> cancelled;
   std::optional<fsv::Location> pending;
   std::future<std::string> operation;
+  fsv::Location scanTarget;
+  std::map<fs::path, std::string> archivePasswords;
+  std::shared_ptr<std::atomic_bool> operationCancel;
+  std::atomic<uint64_t> archiveBytes{0};
+  std::atomic<size_t> archiveEntries{0};
+  std::function<void(const std::string &)> retryArchive;
+  Fl_Button cancelArchive{870, 665, 120, 30, "Cancel"};
   std::vector<std::string> clipboard;
   bool cut = false;
   fs::path temporary;
@@ -346,6 +355,13 @@ class Browser : public dx::GpuWindow {
   }
   void poll() {
     pollDevices();
+    spatial.pollThumbnails();
+    if (operationCancel) {
+      cancelArchive.resize(w()-130,status.y(),120,30);
+      cancelArchive.show();
+      status.resize(8, status.y(), w()-150, 30);
+      status.copy_label(("Archive operation: " + std::to_string(archiveEntries.load()) + " entries, " + std::to_string(archiveBytes.load()/1024) + " KiB").c_str());
+    } else { cancelArchive.hide(); status.resize(8,status.y(),w()-16,30); }
     bool available = entry() != nullptr, idle = !operation.valid(),
          writable = !location.archive && idle;
     bool model = entry() && !entry()->directory && entry()->member.empty() &&
@@ -359,6 +375,9 @@ class Browser : public dx::GpuWindow {
                       "File/Compress...", "Edit/Cut", "Edit/Copy"})
       dx::enable_menu(menu, name, available && writable);
     dx::enable_menu(menu, "File/New folder...", writable);
+    for (auto command : {"File/Extract archive", "File/Extract to..."})
+      dx::enable_menu(menu, command, idle && (location.archive || (available && !entry()->directory)));
+    dx::enable_menu(menu, "File/Extract selected...", idle && location.archive && available);
     dx::enable_menu(menu, "Edit/Paste", writable && !clipboard.empty());
     dx::enable_menu(menu, "Go/Back", !tabs.empty() && tabs[tab].cursor > 0);
     dx::enable_menu(menu, "Go/Forward",
@@ -371,6 +390,7 @@ class Browser : public dx::GpuWindow {
         auto result = scanning.get();
         if (!*cancelled && !pending) {
           location = result.location;
+          if(!location.password.empty())archivePasswords[location.path]=location.password;
           tabs[tab].location = location;
           if (!tabs[tab].history.empty())
             tabs[tab].history[tabs[tab].cursor] = location;
@@ -387,6 +407,13 @@ class Browser : public dx::GpuWindow {
                              "drag: pan · F: focus · R: reset")
                                 .c_str());
         }
+      } catch (const fsv::ArchivePasswordRequired &) {
+        if (!pending && !*cancelled) {
+          auto target = scanTarget;
+          const char *password = fl_password("Password for %s:", "", target.path.filename().c_str());
+          if (password) { archivePasswords[target.path] = password; startScan(target); }
+          else status.copy_label("Archive password entry cancelled.");
+        }
       } catch (const std::exception &e) {
         status.copy_label(e.what());
       }
@@ -399,12 +426,20 @@ class Browser : public dx::GpuWindow {
     if (operation.valid() && operation.wait_for(std::chrono::seconds(0)) ==
                                  std::future_status::ready) {
       auto error = operation.get();
-      if (!error.empty())
-        fl_alert("%s", error.c_str());
+      auto retry = std::move(retryArchive);
+      bool cancelled = operationCancel && operationCancel->load();
+      operationCancel.reset();
+      if (error == "FSVR_ARCHIVE_PASSWORD_REQUIRED" && retry && !cancelled) {
+        const char *password = fl_password("Archive password (required or incorrect):", "");
+        if (password) { retry(password); return; }
+        status.copy_label("Archive password entry cancelled.");
+      } else if (!error.empty() && !cancelled) fl_alert("%s", error.c_str());
       load(location, false);
     }
   }
   void startScan(fsv::Location target) {
+    if (auto password = archivePasswords.find(target.path); password != archivePasswords.end()) target.password = password->second;
+    scanTarget = target;
     cancelled = std::make_shared<std::atomic_bool>(false);
     auto token = cancelled;
     std::promise<ScanResult> promise;
@@ -446,6 +481,7 @@ class Browser : public dx::GpuWindow {
     traceSort();
   }
   void select(int value) {
+    if(modelPreview && (value<0 || value>=int(scene.entries.size()) || scene.entries[value].directory || !scene.entries[value].member.empty() || !fsv::gltf::supported(scene.entries[value].path))) modelPreview->clearPassive();
     selected = value;
     spatial.setSelected(value);
     int row = 0;
@@ -693,15 +729,95 @@ class Browser : public dx::GpuWindow {
       status.copy_label("Wait for the current file operation.");
       return;
     }
+    retryArchive = {};
+    operationCancel.reset();
     operation = std::async(std::launch::async, [fn]() {
       try {
         fn();
         return std::string();
+      } catch (const fsv::ArchivePasswordRequired &) {
+        return std::string("FSVR_ARCHIVE_PASSWORD_REQUIRED");
       } catch (const std::exception &e) {
         return std::string(e.what());
       }
     });
     status.copy_label("File operation in progress...");
+  }
+  void archiveWork(std::function<void(const fsv::ArchiveOptions &)> fn, fsv::ArchiveOptions options = {}) {
+    if (operation.valid()) { status.copy_label("Wait for the current file operation."); return; }
+    if (!options.cancel) options.cancel = std::make_shared<std::atomic_bool>(false);
+    options.progress = [this](uint64_t bytes, size_t entries, const std::string &) { archiveBytes = bytes; archiveEntries = entries; };
+    archiveBytes = 0; archiveEntries = 0;
+    work([fn, options] { fn(options); });
+    operationCancel = options.cancel;
+    retryArchive = [this, fn, options](const std::string &password) mutable { options.password = password; archiveWork(fn, options); };
+  }
+  fsv::ArchiveOptions archiveOptions(const fs::path &source) const {
+    fsv::ArchiveOptions options;
+    auto i = archivePasswords.find(source);
+    if (i != archivePasswords.end()) options.password = i->second;
+    return options;
+  }
+  void createArchive(const fs::path &source) {
+    const auto &formats = fsv::archiveFormats();
+    if (formats.empty()) { fl_alert("No archive writers are available."); return; }
+    Fl_Double_Window dialog(560, 170, "Create archive");
+    Fl_Choice format(120, 20, 420, 32, "Format:");
+    for (const auto &f : formats) { auto label = f.label + " (" + f.extension + ")"; std::replace(label.begin(),label.end(),'/','-'); format.add(label.c_str()); }
+    format.value(0);
+    Fl_Check_Button protect(120, 65, 420, 30, "Encrypt ZIP with a password");
+    Fl_Button cancel(290, 120, 110, 32, "Cancel");
+    Fl_Return_Button next(410, 120, 130, 32, "Choose file...");
+    bool accepted = false;
+    struct Choice { Fl_Double_Window *window; bool *accepted; } choice{&dialog,&accepted};
+    next.callback([](Fl_Widget *, void *p) { auto c=static_cast<Choice *>(p); *c->accepted=true; c->window->hide(); }, &choice);
+    cancel.callback([](Fl_Widget *, void *p) { static_cast<Fl_Window *>(p)->hide(); }, &dialog);
+    format.callback([](Fl_Widget *w, void *p) { auto &protect=*static_cast<Fl_Check_Button *>(p); if(static_cast<Fl_Choice *>(w)->value()==0) protect.activate(); else { protect.value(0); protect.deactivate(); } }, &protect);
+    dialog.end(); dialog.set_modal(); dx::style(&dialog); dialog.show();
+    while (dialog.shown()) Fl::wait();
+    if (!accepted) return;
+    auto selected = formats.at(size_t(format.value()));
+    Fl_Native_File_Chooser chooser;
+    chooser.title("Create archive"); chooser.type(Fl_Native_File_Chooser::BROWSE_SAVE_FILE);
+    chooser.options(Fl_Native_File_Chooser::NEW_FOLDER);
+    chooser.directory(source.parent_path().c_str());
+    chooser.preset_file((source.filename().string()+selected.extension).c_str());
+    chooser.filter((selected.label+"\t*"+selected.extension).c_str());
+    if (chooser.show()) return;
+    fs::path destination = chooser.filename();
+    auto filename=destination.filename().string(), suffix=selected.extension;
+    std::transform(filename.begin(),filename.end(),filename.begin(),[](unsigned char c){return std::tolower(c);});
+    if(filename.size()<suffix.size() || filename.compare(filename.size()-suffix.size(),suffix.size(),suffix)) destination += suffix;
+    fsv::ArchiveOptions options;
+    if(protect.value()) { const char *password=fl_password("New ZIP password:", ""); if(!password) return; if(!*password) { fl_alert("Enter a nonempty ZIP password."); return; } options.password=password; }
+    archiveWork([source,destination](const auto &o){ fsv::compress(std::vector<fs::path>{source},destination,o); },options);
+  }
+  void extractArchive(bool choose, bool onlySelected) {
+    auto e = entry();
+    auto source = location.archive ? location.path : e ? e->path : fs::path();
+    if (source.empty()) return;
+    auto destination=fsv::extractionDestination(source);
+    auto options=archiveOptions(source);
+    if(onlySelected && e && location.archive) options.members={e->member};
+    if(choose) {
+      Fl_Double_Window dialog(690,180,"Extract archive");
+      Fl_Input folder(120,25,440,34,"New folder:");folder.value(destination.c_str());
+      Fl_Button browse(570,25,100,34,"Browse...");
+      Fl_Box scope(20,75,650,30,onlySelected?"Extract the selected archive member or folder":"Extract all archive contents");
+      scope.align(FL_ALIGN_LEFT|FL_ALIGN_INSIDE);
+      Fl_Button cancel(430,125,110,34,"Cancel");
+      Fl_Return_Button extract(550,125,120,34,"Extract");
+      bool accepted=false;
+      struct Dialog { Fl_Double_Window *window; Fl_Input *folder; bool *accepted; } state{&dialog,&folder,&accepted};
+      extract.callback([](Fl_Widget *,void *p){auto d=static_cast<Dialog *>(p);if(!*d->folder->value())return;*d->accepted=true;d->window->hide();},&state);
+      cancel.callback([](Fl_Widget *,void *p){static_cast<Fl_Window *>(p)->hide();},&dialog);
+      browse.callback([](Fl_Widget *,void *p){auto input=static_cast<Fl_Input *>(p);fs::path current=input->value();Fl_Native_File_Chooser chooser;chooser.title("Choose extraction parent folder");chooser.type(Fl_Native_File_Chooser::BROWSE_DIRECTORY);chooser.directory(current.parent_path().c_str());if(!chooser.show()){auto target=fs::path(chooser.filename())/current.filename();input->value(target.c_str());}},&folder);
+      dialog.end();dialog.set_modal();dx::style(&dialog);dialog.show();
+      while(dialog.shown())Fl::wait();
+      if(!accepted)return;
+      destination=folder.value();
+    }
+    archiveWork([source,destination](const auto &o){ fsv::extract(source,destination,o); },options);
   }
   void newTab(fsv::Location target) {
     if (!tabs.empty())
@@ -725,7 +841,7 @@ class Browser : public dx::GpuWindow {
     for (auto label :
          {"Open", "Open in new tab", "Live glTF preview", "Open in XR",
           "Properties", "Cut", "Copy", "Paste", "Rename...", "Move to Trash",
-          "Compress...", "Extract archive"})
+          "Compress...", "Extract archive", "Extract to...", "Extract selected..."})
       popup.add(label, 0, action, this);
     auto e = entry();
     bool model = e && !e->directory && e->member.empty() &&
@@ -745,6 +861,7 @@ public:
     panels.end();
     end();
     add(status);
+    add(cancelArchive);
     sidebar.resize(sidebar.x(), sidebar.y(), sidebar.w(), sidebar.h());
     sidebar.devices.callback(
         [](Fl_Widget *, void *p) {
@@ -786,11 +903,14 @@ public:
              {"File/Open in new tab", FL_CTRL + FL_Enter},
              {"File/New tab", FL_CTRL + 't'},
              {"File/Close tab", FL_CTRL + 'w'},
+             {"File/Close window", FL_META + 'w'},
              {"File/New folder...", FL_CTRL + FL_SHIFT + 'n'},
              {"File/Rename...", FL_F + 2},
              {"File/Properties", FL_ALT + FL_Enter},
              {"File/Compress...", 0},
              {"File/Extract archive", 0},
+             {"File/Extract to...", 0},
+             {"File/Extract selected...", 0},
              {"File/Move to Trash", FL_Delete},
              {"File/Quit", FL_CTRL + 'q'},
              {"Edit/Cut", FL_CTRL + 'x'},
@@ -842,7 +962,7 @@ public:
         [](Fl_Widget *, void *p) {
           auto s = (Browser *)p;
           try {
-            s->load({s->path.value()});
+            s->load(fsv::locationArgument(s->path.value()));
           } catch (const std::exception &e) {
             s->status.copy_label(e.what());
           }
@@ -882,6 +1002,8 @@ public:
     if (auto value = mkdtemp(name))
       temporary = value;
     desktop = std::make_unique<DesktopMenu>(*this, menu);
+    cancelArchive.callback([](Fl_Widget *, void *p){ auto s=static_cast<Browser *>(p); if(s->operationCancel) *s->operationCancel=true; },this);
+    cancelArchive.hide();
     Fl::add_timeout(.05, tick, this);
   }
   void draw() override {
@@ -908,11 +1030,16 @@ public:
       stereo.composite(w(), h(), pixel_w(), pixel_h(), stereoEnabled && spatial.visible());
     }
   }
+  void openArguments(const std::vector<std::string> &arguments) {
+    if(arguments.empty()) { load({getenv("HOME") ? getenv("HOME") : "/"}); return; }
+    for(size_t i=0;i<arguments.size();++i) { auto target=fsv::locationArgument(arguments[i]); if(i==0) load(target); else newTab(target); }
+  }
   ~Browser() {
     if (Fl_Gl_Window::context()) { make_current(); stereo.release(); }
     Fl::remove_timeout(tick, this);
     if (cancelled)
       *cancelled = true;
+    if (operationCancel) *operationCancel = true;
     // Promise-backed scanner workers own their state and honour
     // cancellation; closing a browser must not wait for a slow
     // mount's metadata request.
@@ -926,8 +1053,8 @@ public:
   }
   void requestClose() {
     if (operation.valid()) {
-      status.copy_label("File operation in progress; the browser can close "
-                        "when it finishes.");
+      if (operationCancel) *operationCancel = true;
+      status.copy_label("Finishing or cancelling the current file operation...");
       return;
     }
     if (modelPreview)
@@ -996,16 +1123,13 @@ public:
         modelPreview = std::make_unique<ModelPreview>();
       modelPreview->open(node.path, true);
     } else if (!node.member.empty()) {
-      try {
-        if (temporary.empty())
-          throw std::runtime_error("Cannot create private archive "
-                                   "preview");
-        auto output = fsv::materialize({location.path, node.member, true},
-                                       temporary / std::to_string(++preview));
-        dx::spawn({"gio", "open", output.string()});
-      } catch (const std::exception &error) {
-        status.copy_label(error.what());
-      }
+      if (temporary.empty()) { status.copy_label("Cannot create private archive preview"); return; }
+      auto target = fsv::Location{location.path,node.member,true};
+      auto directory = temporary / std::to_string(++preview);
+      archiveWork([target,directory](const auto &options) {
+        auto output=fsv::materialize(target,directory,options);
+        dx::spawn({"gio","open",output.string()});
+      }, archiveOptions(location.path));
     } else if (fsv::archiveSupported(node.path))
       load({node.path, "", true});
     else
@@ -1046,7 +1170,7 @@ public:
       newTab(location);
     else if (name == "Close tab") {
       if (tabs.size() == 1) {
-        hide();
+        requestClose();
         return;
       }
       tabs.erase(tabs.begin() + tab);
@@ -1134,27 +1258,14 @@ public:
     } else if (name == "Terminal here") {
       if (!location.archive)
         dx::spawn({"env", "-C", location.path.string(), "x-terminal-emulator"});
-    } else if (name == "Quit")
+    } else if (name == "Close window" || name == "Quit")
       requestClose();
     else if (name == "Compress...") {
       if (!e || location.archive)
         return;
-      auto source = e->path;
-      Fl_Native_File_Chooser chooser;
-      chooser.title("Create archive");
-      chooser.type(Fl_Native_File_Chooser::BROWSE_SAVE_FILE);
-      chooser.options(Fl_Native_File_Chooser::NEW_FOLDER);
-      chooser.directory(source.parent_path().c_str());
-      chooser.preset_file((source.filename().string() + ".zip").c_str());
-      chooser.filter("Archives\t*.{zip,tar,tar.gz,tgz,tar.xz,tar.zst}");
-      if (chooser.show() == 0) {
-        fs::path destination = chooser.filename();
-        work([source, destination] { fsv::compress(source, destination); });
-      }
-    } else if (name == "Extract archive") {
-      auto source = location.archive ? location.path : e ? e->path : fs::path();
-      if (!source.empty() && fsv::archiveSupported(source))
-        work([source] { fsv::extract(source); });
+      createArchive(e->path);
+    } else if (name == "Extract archive" || name == "Extract to..." || name == "Extract selected...") {
+      extractArchive(name != "Extract archive", name == "Extract selected...");
     } else if (location.archive) {
       status.copy_label("Archive contents are read-only. Extract to modify "
                         "them.");
@@ -1291,19 +1402,30 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+  if (argc > 1 && std::string(argv[1]) == "--help") {
+    puts("fsvr [--desktop] [--layout map|tree|disc] [--] [directory | archive | local-file-URL ...]\n"
+         "Native FLTK/OpenGL file and archive browser. Multiple operands open tabs.\n"
+         "Archives: browse, create, extract, choose destination or selected members.\n"
+         "Use --version for build information.");
+    return 0;
+  }
   if (argc > 1 && std::string(argv[1]) == "--version") {
-    puts("fsvr FLTK 1.4.5 OpenGL");
+    printf("fsvr FLTK 1.4.5 OpenGL · %s\n",archive_version_string());
     return 0;
   }
   dx::init();
   fl_register_images();
   Browser browser;
-  fsv::Location location{getenv("HOME") ? getenv("HOME") : "/"};
+  std::vector<std::string> operands;
+  bool afterDash = false;
   const char *smoke = nullptr;
   std::string layout = "map";
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--smoke-test" && i + 1 < argc)
+    if (afterDash) operands.push_back(arg);
+    else if (arg == "--") afterDash = true;
+    else if (arg == "--desktop") {}
+    else if (arg == "--smoke-test" && i + 1 < argc)
       smoke = argv[++i];
     else if (arg == "--layout" && i + 1 < argc)
       layout = argv[++i];
@@ -1313,10 +1435,11 @@ int main(int argc, char **argv) {
                       "XR application launcher for the GPU "
                       "Wayland/XR frontend.\n");
       return 2;
-    } else if (argv[i][0] != '-')
-      location.path = argv[i];
+    } else if (argv[i][0] != '-') operands.push_back(arg);
+    else { fprintf(stderr,"fsvr: unknown option: %s\n",arg.c_str()); return 2; }
   }
-  browser.load(location);
+  try { browser.openArguments(operands); }
+  catch(const std::exception &e) { fprintf(stderr,"fsvr: %s\n",e.what()); return 2; }
   browser.setLayout(layout);
   dx::style(&browser);
   browser.show();

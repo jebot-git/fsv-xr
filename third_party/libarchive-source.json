@@ -1,0 +1,8 @@
+{
+  "version": "3.8.10",
+  "url": "https://www.libarchive.org/downloads/libarchive-3.8.10.tar.xz",
+  "sha256": "56cad765459d5ee25a3b761f90c47d99379d28297fbfb72d908880d6b875fb96",
+  "repository": "https://github.com/libarchive/libarchive",
+  "tag": "v3.8.10",
+  "reason": "The WARC reader in 3.8.7 fails after reading a record's payload; 3.8.10 fixes the reader and is the minimum native archive runtime."
+}

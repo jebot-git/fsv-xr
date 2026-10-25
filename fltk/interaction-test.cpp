@@ -156,7 +156,21 @@ int main(int argc, char **argv) try {
   browser.command("Open"); browser.smoke(nullptr);
   require(std::string(findWidget<Fl_Input>(browser)->value()) == (files / "beta").string(),
           "Opening the spatial selection must navigate to the clicked folder");
-  browser.hide();
+  auto closeTab = menu->find_item("File/Close tab");
+  auto closeWindow = menu->find_item("File/Close window");
+  require(closeTab && closeTab->shortcut() == (FL_CTRL + 'w') &&
+          closeWindow && closeWindow->shortcut() == (FL_META + 'w'),
+          "Tab and window close must have distinct Control/Super chords");
+  browser.command("New tab"); browser.load({files}); browser.smoke(nullptr);
+  auto tabs = findWidget<Fl_Choice>(browser); // tab choice is the first choice
+  require(tabs && tabs->size() == 3, "Second tab must open");
+  Fl::e_keysym = 'w'; Fl::e_state = FL_CTRL;
+  require(menu->handle(FL_SHORTCUT), "Close-tab shortcut dispatch"); browser.smoke(nullptr);
+  require(browser.shown() && tabs->size() == 2, "Ctrl+W closes one tab and leaves the window open");
+  browser.command("New tab"); browser.load({files}); browser.smoke(nullptr);
+  Fl::e_keysym = 'w'; Fl::e_state = FL_META;
+  require(menu->handle(FL_SHORTCUT), "Close-window shortcut dispatch");
+  require(!browser.shown(), "Super+W closes the window with multiple tabs");
   std::cout << "PASS: " << (dx::dome() ? "Dome universal menu" : "standalone menu")
             << ", spatial picking in all layouts, sidebar focus, splitter/toggle/resize and open\n";
 } catch (const std::exception &error) {

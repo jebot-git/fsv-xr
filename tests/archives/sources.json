@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/libarchive/libarchive",
+  "tag": "v3.8.10",
+  "fixtures": {
+    "rar-v4.rar": {
+      "source": "test_read_format_rar.rar.uu",
+      "sha256": "d421b86f6290aefad61b2a36737253b2b30fe27c156bd95abfc230f24fe0307e"
+    },
+    "rar-v5.rar": {
+      "source": "test_read_format_rar5_stored.rar.uu",
+      "sha256": "35d75e315d164d2e329afc28f7d844f013271b4fcffd4ddd78efcdd114a383a7"
+    },
+    "cab.cab": {
+      "source": "test_read_format_cab_1.cab.uu",
+      "sha256": "0672797c111fca020fefe1b4b86de410f0eed36b52482a5bd282527392124d0e"
+    },
+    "lha.lzh": {
+      "source": "test_read_format_lha_header0.lzh.uu",
+      "sha256": "286b32e0f5c98016944681e4694b0c7be5c0575570c876d6fc63195a09d3c508"
+    }
+  }
+}

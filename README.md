@@ -8,7 +8,7 @@ with different controls, options and feature coverage.
 ## Default FLTK build and installation
 
 Requires C++17, CMake 3.21+, the de-xr patched FLTK **1.4.5** shared libraries,
-OpenGL 3.3, EGL, OpenXR headers/loader, libarchive, Fontconfig, GIO, Wayland/X11 development libraries and
+OpenGL 3.3, EGL, OpenXR headers/loader, libarchive **3.8.10+**, libpng, libjpeg, giflib, LZO2, Fontconfig, GIO, Wayland/X11 development libraries and
 `wayland-scanner`. Tests additionally use FreeType. FLTK patches supply native
 bitmap strikes, DomeD app IDs/menus and Wayland dialog fixes; an arbitrary system
 FLTK package is not a tested substitute. See [FLTK notes](FLTK_EXPERIMENT.md).
@@ -25,22 +25,40 @@ DESTDIR="$PWD/stage" cmake --install build-fltk --prefix /usr/local
 ```
 
 Build and stage as your regular user. Review the staged tree before installing
-system files with administrator privileges. The FLTK CMake target installs its executable, manual, model dependency notices
-and device service files. Supply the
-matching FLTK runtime through your deployment wrapper or library search path.
-The Qt desktop entries and `fsvr-dome-default` helper belong to the opt-in Qt
-installation and are not installed by this FLTK target.
+system files with administrator privileges. The FLTK CMake target installs its executable, manual, desktop entry, archive
+MIME types/default-selection helper, dependency notices and device service files.
+The executable uses `/opt/fltk-vr/toolkit/lib` for the matching FLTK runtime and
+can use a private libarchive under `/usr/local/lib/fsvr`.
+
+If the distribution ships an older libarchive, build the pinned release privately:
+
+```sh
+bash scripts/build-libarchive.sh "$PWD/build-libarchive/prefix"
+cmake -S . -B build-fltk -DCMAKE_BUILD_TYPE=Release -DDE_XR_TOOLKIT=FLTK \
+  -DFLTK_DIR=/opt/fltk-vr/toolkit/share/fltk \
+  -DLibArchive_INCLUDE_DIR="$PWD/build-libarchive/prefix/include" \
+  -DLibArchive_LIBRARY="$PWD/build-libarchive/prefix/lib/libarchive.so" \
+  -DFSVR_BUNDLE_LIBARCHIVE=ON \
+  -DFSVR_LIBARCHIVE_NOTICE="$PWD/build-libarchive/prefix/share/doc/libarchive/COPYING"
+```
+
+The private runtime avoids replacing the system libarchive. The minimum version
+includes the corrected WARC reader. Build and verify as the regular user, stage,
+and use sudo only to install reviewed system files. No desktop restart is needed.
 When Python 3, `xvfb-run` and `dbus-run-session` are available, CTest also checks
 menu export, spatial input and sidebar resizing on a private display and bus.
 
 ## FLTK browsing, controls and configuration
 
-Open one directory or archive with `fsvr /path`; if several path operands are
-provided, the last selects the initial location. Use the UI to open further tabs.
+Open directories or archives with `fsvr /path`. Multiple operands open separate
+tabs, and local `file:` URLs are decoded without treating filenames as shell text.
+Archive subfolders accept `archive:/encoded/path.zip#encoded/member` or the
+location field's `/path.zip!/member` notation.
 `--layout map|tree|disc` selects MapV, TreeV or DiscV. `--version` prints build
 identity without opening a window. `--smoke-test OUTPUT.png` renders a diagnostic
-capture and exits; it is not a duration option. This frontend has no CLI help
-page or Qt `--select`, `--properties`, `--desktop` or `--domed` routing flags.
+capture and exits; it is not a duration option. `--help` describes the native command line. `--desktop` is accepted for DomeD's
+explicit desktop action; the launcher uses `dome-link` to select the realm.
+Qt `--select`, `--properties` and `--domed` flags remain specific to that frontend.
 
 The browser offers tabs and navigation history, a list and native OpenGL spatial
 scene, ray picking, previews/inspector, asynchronous file operations and archive
@@ -187,6 +205,88 @@ enable fsvr-automount.service`; it is wanted by `dome-session.target` and
 No graphical or XR session needs to be restarted. `ctest` covers policy,
 private-bus fake-UDisks hotplug/operations, and real FLTK device controls. These
 checks do not mount, unlock, eject or power off physical test drives.
+
+Ctrl+W closes the current tab; Super+W closes the browser window. The same
+Super+W chord closes a focused live-model preview window. DomeD owns window
+closing and leaves Ctrl+W with applications; Alt+F4 is no longer its default.
+
+## Native archive operations and defaults
+
+All libarchive readers and compression filters are enabled, with content detection
+for files with unknown extensions. Browsing/extraction includes ZIP, 7-Zip, tar
+and compressed tar, CPIO, ar/deb, RPM, ISO9660/Rock Ridge, XAR, WARC, RAR4/RAR5,
+CAB and LHA/LZH, plus single-file gzip/bzip2/xz/Zstandard/LZ4/LZMA/lzip/lzop/compress
+streams as supported by the selected library. Ordinary DOCX/ODT/EPUB files retain
+their document applications when opened from a filesystem folder.
+
+**Compress…** provides a native format chooser covering available writable
+formats and filters. ZIP can be encrypted with an AES-256 password. RAR, CAB
+and LHA are read-only in libarchive; they are not offered as output formats.
+`ar` and WARC accept files; raw compressed streams accept one file. ISO images
+use strict Rock Ridge metadata and level 3 for large files. `mtree` output is a
+metadata manifest, not a payload backup. Shell archives are write-only outputs;
+fsvr never executes them. Names/extensions select the actual writer: an unknown
+output extension is an error rather than a silently mislabeled tar file.
+
+**Extract archive** creates a new sibling `.extracted` folder. **Extract to…**
+chooses a new destination, and **Extract selected…** extracts the chosen archive
+member/subtree. Existing files/folders are refused. Operations run outside the UI
+thread, report progress, and offer Cancel. Missing/incorrect passwords prompt on
+the UI thread and retry without retaining partial output. Passwords stay in
+memory; they are not put into settings, process arguments or logs.
+
+Safe relative symbolic links and hard links are preserved on extraction, including
+forward/chained hard links. Parent traversal, absolute paths, escaping links,
+symlink parents and device/socket entries are rejected. Permissions and timestamps
+are restored without changing ownership or retaining setuid/setgid bits. Damaged
+headers, data errors and writer-finalization errors fail the operation and remove
+partial output. Extraction has a one-million-entry default; there is no fixed
+10 GiB byte cap. Core callers can set an explicit byte quota. Browsing remains
+bounded to the existing view limits; member previews remain capped at 64 MiB.
+Archive contents are read-only: extract before editing, or create a new archive.
+
+The native desktop entry advertises 35 archive MIME types, and DomeD's Default
+Applications pane recommends installed fsvr for them when a Dome choice has not
+been saved. Existing explicit choices remain available. To explicitly select
+fsvr for archives while preserving folder/trash choices and other desktop defaults:
+
+```sh
+fsvr-dome-default --archives-only
+```
+
+The helper edits only `dome-mimeapps.list`, preserving comments and unrelated
+sections. After installation, update the desktop/MIME databases so GIO can
+discover the native desktop entry and WARC/mtree MIME definitions. The new DomeD
+settings rows appear in its next session; ordinary archive opening uses the
+installed handler immediately.
+
+## Bounded previews and folder navigation
+
+Folder image cards use one background decoder worker, a 16-request queue and a
+16 MiB CPU thumbnail cache. Output is at most 256×96 RGBA pixels. JPEG decoding
+uses native DCT downscaling and honors EXIF orientation; PNG and GIF use scanline
+sampling, and BMP reads only sampled rows. No full-resolution raster or GIF
+logical canvas is allocated for a thumbnail. Compressed inputs, row allocations,
+JPEG work memory and decode duration are bounded; malformed/over-budget images
+fall back to normal file cards. Folder changes cancel pending work and discard
+stale results. The GPU label cache remains capped at 512 small card textures.
+Freedesktop cached thumbnails are used when their source metadata is valid.
+
+The optional Qt thumbnail/inspector provider and external-thumbnailer result
+loading use the same bounded raster decoder. Other Qt image plugins have explicit
+header-size limits before decoding. Native glTF model textures retain their
+existing 16-megapixel-per-image and 128 MiB aggregate decoded-texture limits;
+full model viewing is distinct from a small image card. Hidden passive model
+previews are cancelled and released when selection changes, while an explicitly
+opened model window or XR object retains its own lifetime.
+
+Tests include real round trips across available writable families/filters,
+upstream RAR4/RAR5/CAB/LHA fixtures, encrypted ZIPs, selected extraction, links,
+corruption, cancellation and literal file URLs. Preview tests cover a 100 MP PNG,
+scaled JPEGs, EXIF orientation, huge GIF canvases, sparse BMPs and malformed files.
+Private-display UI checks cover password dialogs, format selection and repeated
+image-heavy folder changes. The release was also exercised on the actual Pictures
+folder through native Wayland/Arc A770 without modifying that folder.
 
 ## Opt-in Qt6 frontend
 

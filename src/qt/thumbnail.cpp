@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "thumbnail.h"
 #include "archives.h"
+#include "thumbnail-decode.h"
+#include <QImageIOHandler>
 #include <QGuiApplication>
 #include <QCryptographicHash>
 #include <QFileInfo>
@@ -21,12 +23,34 @@ QString ThumbnailProvider::url(const QString &path, qint64 modifiedMs, bool arch
         + '/' + QString::number(modifiedMs < 0 ? QFileInfo(Archives::isLocation(path) ? Archives::source(path) : path).lastModified().toMSecsSinceEpoch() : modifiedMs)
         + (archivePreview ? "/preview" : "");
 }
-static QImage readImage(const QString &path, const QSize &size)
+static QImage readImage(const QString &path, const QSize &size, bool cacheMetadata=false)
 {
+    const QSize target=size.boundedTo(QSize(1024,1024));
+    fsv_thumbnail bounded{};
+    const QByteArray filename=QFile::encodeName(path);
+    if(fsv_thumbnail_decode(filename.constData(),target.width(),target.height(),&bounded,nullptr,nullptr)) {
+        QImage image(bounded.rgba,bounded.width,bounded.height,bounded.width*4,QImage::Format_RGBA8888);
+        QImage result=image.copy();
+        if(cacheMetadata) {
+            result.setText("Thumb::URI",QString::fromUtf8(bounded.uri));
+            result.setText("Thumb::MTime",QString::fromUtf8(bounded.mtime));
+        }
+        fsv_thumbnail_free(&bounded);
+        return result;
+    }
+    bool known=bounded.kind!=0;
+    fsv_thumbnail_free(&bounded);
+    // Do not bypass a rejected bounded PNG/JPEG/GIF/BMP or parse unbounded
+    // cache metadata with a second decoder.
+    if(known || cacheMetadata || QFileInfo(path).size()>64*1024*1024) return {};
+    static const bool budget=[] { QImageReader::setAllocationLimit(64); return true; }();
+    (void)budget;
     QImageReader reader(path);
     reader.setAutoTransform(true);
-    const QSize original = reader.size();
-    if (original.isValid()) reader.setScaledSize(original.scaled(size, Qt::KeepAspectRatio));
+    const QSize original=reader.size();
+    if(!original.isValid() || original.width()>16384 || original.height()>16384 ||
+       quint64(original.width())*original.height()>8*1024*1024) return {};
+    reader.setScaledSize(original.scaled(target,Qt::KeepAspectRatio));
     return reader.read();
 }
 static QHash<QString, QString> thumbnailerEntry(const QString &path)
@@ -93,7 +117,7 @@ QImage ThumbnailProvider::requestImage(const QString &id, QSize *size, const QSi
         const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/thumbnails/";
         for (const auto &folder : {"xx-large", "x-large", "large", "normal"}) {
             const QString cachedPath = cache + folder + '/' + hash + ".png";
-            QImage cached(cachedPath);
+            QImage cached=readImage(cachedPath,target,true);
             if (!cached.isNull() && cached.text("Thumb::URI") == uri &&
                 cached.text("Thumb::MTime").toLongLong() == info.lastModified().toSecsSinceEpoch()) {
                 result = cached.scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation); break;

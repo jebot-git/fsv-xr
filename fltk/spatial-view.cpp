@@ -22,6 +22,18 @@ void SpatialView::invalidateLabels() {
   }
   labels.clear();
 }
+void SpatialView::pollThumbnails() {
+  auto ready=thumbnails.completed();
+  if(ready.empty())return;
+  make_current();
+  for(const auto &path:ready) {
+    auto pending=pendingLabels.find(path);
+    if(pending==pendingLabels.end())continue;
+    if(auto label=labels.find(pending->second);label!=labels.end()){glDeleteTextures(1,&label->second);labels.erase(label);}
+    pendingLabels.erase(pending);
+  }
+  redraw();
+}
 void SpatialView::setup() {
   glViewport(0, 0, pixel_w(), pixel_h());
   glMatrixMode(GL_PROJECTION);
@@ -92,16 +104,14 @@ GLuint SpatialView::label(const fsv::Entry &e) {
   fl_rectf(0, 0, W, H);
   if (!e.directory && e.member.empty()) {
     auto ext = e.path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return std::tolower(c);});
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" ||
         ext == ".bmp") {
-      auto image = Fl_Shared_Image::get(e.path.c_str());
-      if (image && !image->fail()) {
-        image->scale(W, H - 30, 1, 1);
-        image->draw((W - image->w()) / 2, 0);
-      }
-      if (image)
-        image->release();
+      auto image=thumbnails.request(e.path);
+      if(image && !image->rgba.empty()) {
+        Fl_RGB_Image preview(image->rgba.data(),image->width,image->height,4);
+        preview.draw((W-image->width)/2,(H-32-image->height)/2);
+      } else if(!image) pendingLabels[e.path]=key;
     }
   }
   fl_color(FL_FOREGROUND_COLOR);
@@ -110,14 +120,16 @@ GLuint SpatialView::label(const fsv::Entry &e) {
           FL_ALIGN_CENTER | FL_ALIGN_WRAP);
   auto rgb = surface.image();
   Fl_Surface_Device::pop_current();
-  if (!rgb)
+  if (!rgb || rgb->fail() || !rgb->data() || !rgb->data()[0] || rgb->w()<1 || rgb->h()<1 || rgb->d()<3) {
+    delete rgb;
     return 0;
+  }
   std::vector<unsigned char> pixels(W * H * 4, 255);
   auto data = rgb->data()[0];
-  int stride = rgb->ld() ? rgb->ld() : W * rgb->d();
+  int stride = rgb->ld() ? rgb->ld() : rgb->data_w() * rgb->d();
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x)
-      memcpy(pixels.data() + (y * W + x) * 4, data + y * stride + x * rgb->d(),
+      memcpy(pixels.data() + (y * W + x) * 4, data + std::min(rgb->data_h()-1,y*rgb->data_h()/H)*stride + std::min(rgb->data_w()-1,x*rgb->data_w()/W)*rgb->d(),
              3);
   delete rgb;
   GLuint texture;

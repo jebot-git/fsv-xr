@@ -136,7 +136,7 @@ int main() try {
   fs::create_directories(root / "source/a/b");
   std::ofstream(root / "source/one.txt") << "12345";
   std::ofstream(root / "source/a/two.txt") << "1234567";
-  fs::create_directory_symlink(root / "source", root / "source/loop");
+  fs::create_directory_symlink(".", root / "source/loop");
   auto token = std::make_shared<std::atomic_bool>(false);
   auto result = scan({root / "source"}, token);
   require(result.entries.size() == 5,
@@ -185,8 +185,8 @@ int main() try {
   auto extracted = extract(root / "safe.zip");
   require(fs::file_size(extracted / "source/one.txt") == 5,
           "Safe archive extraction round-trips files");
-  require(!fs::exists(extracted / "source/loop"),
-          "Compression does not follow symlink loops");
+  require(fs::is_symlink(extracted / "source/loop"),
+          "Compression preserves symlinks without following loops");
   bool refused = false;
   try {
     extract(root / "safe.zip");

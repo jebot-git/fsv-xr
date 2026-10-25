@@ -7,5 +7,5 @@ import sys
 # Dome launchers can inherit blocked termination signals. Test services must
 # receive SIGTERM so xvfb-run and dbus-run-session can clean up normally.
 signal.pthread_sigmask(signal.SIG_SETMASK, [])
-xvfb, dbus, executable = sys.argv[1:]
-os.execv(xvfb, [xvfb, "-a", dbus, "--", executable])
+xvfb, dbus, executable, *arguments = sys.argv[1:]
+os.execv(xvfb, [xvfb, "-a", dbus, "--", executable, *arguments])

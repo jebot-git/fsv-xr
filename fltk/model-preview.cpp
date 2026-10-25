@@ -35,6 +35,7 @@ ModelView::~ModelView() {
 }
 void ModelView::setModel(std::shared_ptr<const Model> value) {
   if (value != model) {
+    if(!value) { if(context()) { make_current(); renderer.clear(); } else renderer.abandon(); }
     model = std::move(value);
     error.clear();
     seconds = 0;
@@ -141,7 +142,7 @@ ModelPreview::ModelPreview()
   for (auto label :
        {"File/Open in XR", "File/Close XR", "File/Close preview",
         "View/Reset view", "View/Play animation", "View/Orbit model"})
-    menu.add(label, 0, action, this);
+    menu.add(label, std::string(label) == "File/Close preview" ? FL_META + 'w' : 0, action, this);
   for (auto button : {&openXR, &closeXR, &resetView, &play, &autoOrbit})
     button->callback(action, this);
   autoOrbit.type(FL_TOGGLE_BUTTON);
@@ -167,6 +168,11 @@ ModelPreview::ModelPreview()
   last = std::chrono::steady_clock::now();
   Fl::add_timeout(1. / 30, tick, this);
   resize(x(), y(), w(), h());
+}
+int ModelPreview::handle(int event) {
+  if (event == FL_SHORTCUT && !menu.visible() && !Fl::modal() && menu.handle(event))
+    return 1;
+  return dx::GpuWindow::handle(event);
 }
 ModelPreview::~ModelPreview() {
   Fl::remove_timeout(tick, this);
@@ -212,6 +218,15 @@ void ModelPreview::open(const std::filesystem::path &path, bool showPreview,
   if (showPreview)
     show();
   poll();
+}
+void ModelPreview::clearPassive() {
+  // A hidden inspector preview follows selection, while a user-opened window
+  // or active XR object keeps its independent lifetime.
+  if(shown() || child>0 || pendingXR) return;
+  source.clear();
+  loader.clear();
+  view.setModel({});
+  revision=0;
 }
 void ModelPreview::poll() {
   auto now = std::chrono::steady_clock::now();
