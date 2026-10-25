@@ -54,6 +54,25 @@ int main() try {
   wait([&] { return preview.frames > first + 4; });
   require(preview.modelView().failure().empty(), "Model rendering failed");
   require(preview.coloredFrames > 0, "Containing GPU surface lacks model pixels");
+  require(preview.modelView().take_focus(), "Model viewport must accept keyboard focus");
+  auto click = [&](const char *label) {
+    Fl_Widget *button = nullptr;
+    for (int i=0;i<preview.children();++i) {
+      auto widget=static_cast<Fl_Group &>(preview).child(i);
+      if(widget->label() && std::string(widget->label())==label) button=widget;
+    }
+    require(button, "Preview control missing");
+    Fl::e_x=button->x()+button->w()/2;Fl::e_y=button->y()+button->h()/2;
+    Fl::e_keysym=FL_Button+1;Fl::e_state=FL_BUTTON1;Fl::e_clicks=0;Fl::e_is_click=1;
+    Fl::handle(FL_PUSH,&preview);Fl::e_state=0;Fl::handle(FL_RELEASE,&preview);
+  };
+  click("Pause");
+  require(!preview.modelView().playing,"Pause control did not receive input");
+  click("Play");
+  require(preview.modelView().playing,"Play control did not receive input");
+  click("Orbit");
+  require(!preview.modelView().orbit,"Orbit control did not receive input");
+  click("Reset view");
   preview.modelView().orbit = preview.modelView().playing = false;
   for (int i=0;i<40;++i) Fl::wait(.01);
   auto idle = preview.frames;

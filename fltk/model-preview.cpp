@@ -167,6 +167,8 @@ void ModelView::draw() {
   glPopAttrib();
 }
 int ModelView::handle(int event) {
+  if (event == FL_FOCUS || event == FL_UNFOCUS)
+    return 1;
   if (event == FL_PUSH) {
     button = Fl::event_button();
     downX = Fl::event_x();
