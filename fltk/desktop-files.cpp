@@ -165,10 +165,10 @@ void writeBookmarks(const std::string &s) {
 } // namespace
 std::string fileUri(const fs::path &p) {
   auto absolute = fs::absolute(p).lexically_normal();
-  GError *e = nullptr;
-  auto uri = g_filename_to_uri(absolute.c_str(), nullptr, &e);
+  Object<GFile> file(g_file_new_for_path(absolute.c_str()));
+  auto uri = g_file_get_uri(file.get());
   if (!uri)
-    error(e, "Invalid file path");
+    fail("Invalid file path");
   std::string result = uri;
   g_free(uri);
   return result;
@@ -176,6 +176,13 @@ std::string fileUri(const fs::path &p) {
 fs::path localFile(const std::string &uri) {
   if (uri.find('\0') != std::string::npos)
     fail("Invalid file URL");
+  if (uri.rfind("smb:", 0) == 0) {
+    auto address = smbUri(uri);
+    Object<GFile> file(g_file_new_for_uri(address.c_str()));
+    auto path = g_file_get_path(file.get());
+    if (!path) fail("Connect the SMB share in FSVR before pasting its files");
+    fs::path result(path); g_free(path); return result;
+  }
   gchar *host = nullptr;
   GError *e = nullptr;
   gchar *p = g_filename_from_uri(uri.c_str(), &host, &e);
@@ -219,11 +226,11 @@ FileList parseFiles(const std::string &bytes, const std::string &mime) {
       line.pop_back();
     if (line.empty() || line[0] == '#')
       continue;
-    fs::path p = line.rfind("file:", 0) == 0              ? localFile(line)
+    fs::path p = (line.rfind("file:", 0) == 0 || line.rfind("smb:", 0) == 0) ? localFile(line)
                  : mime == "text/plain" && line[0] == '/' ? fs::path(line)
                                                           : fs::path();
     if (p.empty())
-      fail("Clipboard does not contain a local file list");
+      fail("Clipboard does not contain local or connected SMB files");
     p = fs::absolute(p).lexically_normal();
     if (seen.insert(p).second)
       result.paths.push_back(p);
@@ -368,9 +375,9 @@ std::vector<Place> places() {
       auto split = line.find(' ');
       auto uri = line.substr(0, split);
       try {
-        Location l = uri == "trash:///" ? trash : Location{localFile(uri)};
+        Location l = uri == "trash:///" ? trash : uri.rfind("smb:", 0) == 0 ? locationArgument(uri) : Location{localFile(uri)};
         auto name =
-            split == std::string::npos ? l.path.filename().string() : line.substr(split + 1);
+            split == std::string::npos ? (l.network.empty() ? l.path.filename().string() : l.network) : line.substr(split + 1);
         add(name, l, editable);
       } catch (const std::exception &) {
       }
@@ -386,7 +393,8 @@ std::vector<Place> places() {
   } state;
   state.add = [&](const std::string &uri, const std::string &name) {
     try {
-      add(name.empty() ? localFile(uri).filename().string() : name, {localFile(uri)});
+      auto location = uri.rfind("smb:", 0) == 0 ? locationArgument(uri) : Location{localFile(uri)};
+      add(name.empty() ? (location.network.empty() ? location.path.filename().string() : location.network) : name, location);
     } catch (const std::exception &) {
     }
   };
@@ -431,9 +439,9 @@ std::vector<Place> places() {
 void bookmark(const Location &l, const std::string &name) {
   if (l.archive || l.trash)
     fail("Bookmark a local directory");
-  if (!fs::is_directory(l.path))
+  if (l.network.empty() && !fs::is_directory(l.path))
     fail("Bookmark a directory");
-  auto uri = fileUri(l.path);
+  auto uri = l.network.empty() ? fileUri(l.path) : smbUri(l.network);
   std::istringstream input(readSmall(bookmarkFile()));
   std::string line;
   while (std::getline(input, line))
@@ -451,7 +459,7 @@ void bookmark(const Location &l, const std::string &name) {
 bool removeBookmark(const Location &l) {
   if (l.trash || l.archive)
     return false;
-  auto uri = fileUri(l.path);
+  auto uri = l.network.empty() ? fileUri(l.path) : smbUri(l.network);
   std::istringstream input(readSmall(bookmarkFile()));
   std::string line, out;
   bool removed = false;

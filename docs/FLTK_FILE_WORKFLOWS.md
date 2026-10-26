@@ -12,7 +12,7 @@ selected row to carry the whole selection. Shift-left drag still pans the scene.
 
 Places contains Home, configured XDG directories, Trash and File System, plus
 local bookmarks from GTK (`gtk-3.0/bookmarks` and `.gtk-bookmarks`) and Dolphin
-(`user-places.xbel`). Remote entries are omitted. Ctrl+D or Go → Add bookmark saves
+(`user-places.xbel`). SMB entries are supported; other remote entries are omitted. Ctrl+D or Go → Add bookmark saves
 the current directory in `$XDG_CONFIG_HOME/fsvr/places`; Remove bookmark removes
 only an FSVR bookmark. Imported bookmark files are never rewritten.
 
@@ -64,8 +64,10 @@ later item fails or the operation is cancelled.
 
 ## Current limits and verification
 
-Only local paths and local `file://` URLs are accepted. Remote URL browsing,
-authentication and network bookmark mounting are not implemented. Trash directory
+Local paths, local `file://` URLs and SMB URLs are accepted. SMB server/share
+browsing, native authentication, stable bookmarks and normal file operations use
+the headless GVfs SMB/FUSE runtime; see [SMB support](SMB.md). Other remote schemes
+are not implemented. Trash directory
 contents are restored as units rather than browsed in place. ACLs, extended
 attributes, hard-link relationships and sparse allocation are not guaranteed to
 survive copies. Fractional scaling and physical-headset input need broader coverage.

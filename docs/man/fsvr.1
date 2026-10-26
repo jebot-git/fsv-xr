@@ -80,6 +80,15 @@ Ctrl+A selects all, Ctrl/Shift+click toggles/ranges the list selection;
 Ctrl+D bookmarks the current folder. Ctrl+Shift+N creates a folder.
 Super+W closes the window; Super+Q quits.
 .SH PLACES, TRASH AND FILE TRANSFERS
+.SS SMB / Samba
+Enter smb://server/ to list shares or smb://server/share/folder to connect directly.
+Go / Connect to SMB server opens the native connection flow. Authentication uses
+FLTK username/domain and masked-password controls; credentials are never stored
+in bookmarks or command arguments. The headless GVfs SMB and FUSE backends provide
+user-session filesystem access for normal file operations and previews.
+Go / Disconnect SMB share performs a normal unmount without forcing busy clients.
+SMB bookmarks reconnect using stable URLs. Other remote schemes are unsupported.
+.PP
 Places lists Home, XDG user directories, Trash, File System and local GTK/Dolphin
 bookmarks. Go / Add bookmark and Remove bookmark manage FSVR's own bookmarks.
 The location trash:/// opens the current user's home and mounted-volume Trash.

@@ -8,7 +8,7 @@ Icon=system-file-manager
 Terminal=false
 Categories=System;FileTools;FileManager;
 Keywords=filesystem;files;archives;extract;compress;3D;OpenGL;XR;DomeD;
-MimeType=inode/directory;x-scheme-handler/trash;
+MimeType=inode/directory;x-scheme-handler/trash;x-scheme-handler/smb;
 StartupWMClass=org.fsvxr.fsvr
 Actions=Desktop;DomeD;
 

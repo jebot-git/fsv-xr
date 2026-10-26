@@ -33,6 +33,7 @@ struct Entry {
     int64_t changedSeconds = 0, changedNanos = 0;
   };
   std::optional<Trash> trash;
+  std::string networkUri = "";
 };
 enum class SortKey { Name, Size, Modified, Type, Created, Accessed, Extension };
 struct SortOptions {
@@ -53,12 +54,15 @@ struct Location {
   bool archive = false;
   std::string password = "";
   bool trash = false;
+  // Persistent identity; path is the current session's GVfs FUSE access path.
+  std::string network = "";
   std::string display() const {
-    return trash ? "trash:///" : path.string() + (archive ? "!/" + member : "");
+    return trash ? "trash:///" : (network.empty() ? path.string() : network) + (archive ? "!/" + member : "");
   }
   bool operator==(const Location &b) const {
     return trash == b.trash &&
-           (trash || (path == b.path && member == b.member && archive == b.archive));
+           (trash || ((!network.empty() || !b.network.empty() ? network == b.network : path == b.path)
+                      && member == b.member && archive == b.archive));
   }
 };
 struct Scene {
@@ -72,6 +76,7 @@ Scene arrange(std::vector<Entry>, const std::string &layout);
 bool archiveSupported(const fs::path &);
 std::string safeMember(const std::string &);
 Location locationArgument(const std::string &);
+std::string smbUri(const std::string &);
 fs::path materialize(const Location &, const fs::path &temporary, const ArchiveOptions & = {});
 fs::path extract(const fs::path &archive);
 void compress(const fs::path &source, const fs::path &destination);

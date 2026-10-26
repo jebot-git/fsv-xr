@@ -32,6 +32,7 @@
 #include "gpu-window.h"
 #include "model-preview.h"
 #include "model.h"
+#include "network-ui.h"
 #include "spatial-view.h"
 namespace fs = std::filesystem;
 class FilesBrowser : public Fl_Multi_Browser {
@@ -180,6 +181,56 @@ class Browser : public dx::GpuWindow {
   fs::path temporary;
   uint64_t preview = 0;
   DevicesClient devicesClient;
+  NetworkClient networkClient;
+  std::unique_ptr<SmbLogin> smbLogin;
+  std::optional<fsv::Location> networkTarget;
+  void pollNetwork() {
+    try {
+      if (smbLogin && smbLogin->response) {
+        networkClient.send(std::move(*smbLogin->response));
+        smbLogin.reset();
+      }
+      auto event = networkClient.poll();
+      if (!event) return;
+      auto kind = event->value("event", "");
+      if (kind == "password") { smbLogin = std::make_unique<SmbLogin>(*event); return; }
+      if (kind == "question") {
+        auto choices = event->at("choices").get<std::vector<std::string>>();
+        int answer = -1;
+        if (!choices.empty() && choices.size() <= 3)
+          answer = fl_choice("%s", choices[0].c_str(), choices.size()>1 ? choices[1].c_str() : nullptr,
+                              choices.size()>2 ? choices[2].c_str() : nullptr, event->value("message", "").c_str());
+        networkClient.send(Json{{"command", "answer"}, {"choice", answer}}); return;
+      }
+      smbLogin.reset();
+      if (event->contains("error")) {
+        status.copy_label(event->at("error").get<std::string>().c_str()); networkTarget.reset(); return;
+      }
+      auto result = event->value("kind", "");
+      if (result == "disconnected") {
+        networkTarget.reset();
+        load({getenv("HOME") ? getenv("HOME") : "/"});
+        status.copy_label("SMB share disconnected."); return;
+      }
+      if (!networkTarget) return;
+      auto target = *networkTarget; networkTarget.reset();
+      if (result == "connected") {
+        target.path = event->at("path").get<std::string>();
+        // Direct calls skip re-mounting only after the helper supplied a FUSE path.
+        load(target, false, true);
+      } else if (result == "shares") {
+        scene = {};
+        for (auto &share : event->at("entries")) {
+          fsv::Entry entry; entry.directory = true; entry.name = share.at("name").get<std::string>();
+          entry.networkUri = fsv::smbUri(share.at("uri").get<std::string>());
+          scene.entries.push_back(std::move(entry));
+        }
+        scene = fsv::arrange(fsv::sortEntries(std::move(scene.entries), sorting), layout);
+        spatial.setScene(&scene); fillList();
+        status.copy_label("Select a share and open it to connect.");
+      }
+    } catch (const std::exception &e) { smbLogin.reset(); networkClient.cancel(); networkTarget.reset(); status.copy_label(e.what()); }
+  }
   Json deviceRows = Json::array();
   std::string deviceSignature, deviceError, pendingDevice;
   bool deviceReady = false, automountEnabled = true, openAfterMount = false;
@@ -195,7 +246,7 @@ class Browser : public dx::GpuWindow {
     return result;
   }
   std::optional<fs::path> dropDestination(int x, int y) {
-    if (operation.valid() || location.archive || location.trash)
+    if (operation.valid() || location.archive || location.trash || location.path.empty())
       return {};
     auto inside = [&](const Fl_Widget &w) {
       return x >= w.x() && x < w.x() + w.w() && y >= w.y() && y < w.y() + w.h();
@@ -212,7 +263,7 @@ class Browser : public dx::GpuWindow {
     return {};
   }
   void dragFiles() {
-    if (location.archive || location.trash || operation.valid())
+    if (location.archive || location.trash || operation.valid() || location.path.empty())
       return;
     fsv::FileList files;
     for (auto &e : selection())
@@ -492,6 +543,7 @@ class Browser : public dx::GpuWindow {
       s->command(bar->mvalue()->label());
   }
   void poll() {
+    pollNetwork();
     try {
       if (fileClipboard)
         fileClipboard->poll();
@@ -525,7 +577,10 @@ class Browser : public dx::GpuWindow {
     }
     pollDevices();
     spatial.pollThumbnails();
-    if (operationCancel) {
+    if (networkClient.busy()) {
+      cancelArchive.resize(w()-130,status.y(),120,30); cancelArchive.show();
+      status.resize(8,status.y(),w()-150,30);
+    } else if (operationCancel) {
       cancelArchive.resize(w()-130,status.y(),120,30);
       cancelArchive.show();
       status.resize(8, status.y(), w()-150, 30);
@@ -534,7 +589,8 @@ class Browser : public dx::GpuWindow {
                             .c_str());
     } else { cancelArchive.hide(); status.resize(8,status.y(),w()-16,30); }
     bool available = entry() != nullptr, idle = !operation.valid(),
-         writable = !location.archive && !location.trash && idle;
+         writable = !location.archive && !location.trash && !location.path.empty() && idle && !networkClient.busy();
+    dx::enable_menu(menu, "Go/Disconnect SMB share", !location.network.empty() && !location.path.empty() && idle && !networkClient.busy());
     bool model = !location.trash && entry() && !entry()->directory && entry()->member.empty() &&
                  fsv::gltf::supported(entry()->path);
     dx::enable_menu(menu, "File/Live glTF preview", model);
@@ -652,7 +708,7 @@ class Browser : public dx::GpuWindow {
             target.archive = true;
           }
         }
-        p.set_value({fsv::scan(target, token), target});
+        p.set_value({fsv::scan(target, token, target.network.empty() || target.archive ? 3 : 0), target});
       } catch (...) {
         p.set_exception(std::current_exception());
       }
@@ -1100,7 +1156,7 @@ class Browser : public dx::GpuWindow {
     dx::enable_menu(popup, "Open in XR",
                     model && modelPreview && modelPreview->canOpenXR());
     for (auto command : {"Cut", "Copy", "Paste", "Rename...", "Move to Trash", "Compress..."})
-      dx::enable_menu(popup, command, !location.trash && !location.archive && !operation.valid());
+      dx::enable_menu(popup, command, !location.trash && !location.archive && !location.path.empty() && !operation.valid());
     for (auto command : {"Restore from Trash", "Delete permanently", "Empty Trash"})
       dx::enable_menu(popup, command, location.trash && !operation.valid());
     sortMenu(popup, "Sort by/");
@@ -1188,6 +1244,8 @@ public:
              {"Go/Forward", FL_ALT + FL_Right},
              {"Go/Up", FL_ALT + FL_Up},
              {"Go/Home", FL_ALT + FL_Home},
+             {"Go/Connect to SMB server...", 0},
+             {"Go/Disconnect SMB share", 0},
              {"Go/Trash", 0},
              {"Go/Add bookmark", FL_CTRL + 'd'},
              {"Go/Remove bookmark", 0},
@@ -1289,7 +1347,8 @@ public:
         transferFiles(std::move(files), *destination);
     };
     fileClipboard->failed = [this](const std::string &error) { status.copy_label(error.c_str()); };
-    cancelArchive.callback([](Fl_Widget *, void *p){ auto s=static_cast<Browser *>(p); if(s->operationCancel) *s->operationCancel=true; },this);
+    cancelArchive.callback([](Fl_Widget *, void *p){ auto s=static_cast<Browser *>(p); if(s->operationCancel) *s->operationCancel=true;
+      if(s->networkClient.busy()) { s->smbLogin.reset(); s->networkClient.cancel(); s->networkTarget.reset(); s->status.copy_label("SMB connection cancelled."); } },this);
     cancelArchive.hide();
     Fl::add_timeout(.05, tick, this);
   }
@@ -1339,6 +1398,7 @@ public:
     }
   }
   void requestClose() {
+    smbLogin.reset(); networkClient.cancel(); networkTarget.reset();
     if (operation.valid()) {
       if (operationCancel) *operationCancel = true;
       status.copy_label("Finishing or cancelling the current file operation...");
@@ -1358,7 +1418,7 @@ public:
     }
     return dx::GpuWindow::handle(event);
   }
-  void load(fsv::Location target, bool history = true) {
+  void load(fsv::Location target, bool history = true, bool networkResolved = false) {
     try {
       if (operation.valid())
         throw std::runtime_error("Wait for the current file operation");
@@ -1366,7 +1426,11 @@ public:
       if (target == location)
         for (auto &e : selection())
           rescanSelection.push_back(e.path);
-      if (!target.archive && !target.trash)
+      smbLogin.reset(); networkClient.cancel(); networkTarget.reset();
+      if (!target.path.empty() && target.network.empty() && !target.trash)
+        target.network = networkClient.uriFor(target.path);
+      if (!target.network.empty() && !networkResolved) target.path.clear();
+      if (!target.archive && !target.trash && !target.path.empty())
         target.path = fs::absolute(target.path).lexically_normal();
       if (tabs.empty()) {
         tabs.push_back({});
@@ -1395,6 +1459,14 @@ public:
       list.clear();
       listed.clear();
       select(-1);
+      if (!target.network.empty() && !networkResolved) {
+        if (cancelled) *cancelled = true;
+        pending.reset();
+        networkTarget = target;
+        networkClient.start(target.network);
+        status.copy_label("Connecting to SMB server...");
+        return;
+      }
       if (scanning.valid()) {
         *cancelled = true;
         pending = target;
@@ -1409,6 +1481,7 @@ public:
     if (!e)
       return;
     auto node = *e;
+    if (!node.networkUri.empty()) { load(fsv::locationArgument(node.networkUri)); return; }
     if (location.trash) {
       status.copy_label("Restore this item before opening it.");
       return;
@@ -1455,10 +1528,31 @@ public:
       load(target);
       return;
     }
+    if (name == "Connect to SMB server...") {
+      if (auto uri = fl_input("SMB server or share (smb://server/share):", "smb://")) {
+        try { load(fsv::locationArgument(uri)); } catch (const std::exception &error) { status.copy_label(error.what()); }
+      }
+      return;
+    }
+    if (name == "Disconnect SMB share") {
+      if (!location.network.empty() && !location.path.empty() && !operation.valid()) {
+        if (fl_choice("Disconnect this SMB share for applications in this login?", "Cancel", "Disconnect", nullptr) == 1) {
+          if (cancelled) *cancelled = true;
+          networkClient.start(location.network, true);
+          status.copy_label("Disconnecting SMB share...");
+        }
+      }
+      return;
+    }
+    if (location.path.empty() && !location.network.empty() &&
+        (name == "Paste" || name == "Cut" || name == "Copy" || name == "Rename..." ||
+         name == "Move to Trash" || name == "New folder..." || name == "Terminal here")) {
+      status.copy_label("Open a share before using file operations."); return;
+    }
     if (name == "Add bookmark" || name == "Remove bookmark") {
       try {
         if (name == "Add bookmark")
-          fsv::bookmark(location, location.path.filename());
+          fsv::bookmark(location, location.network.empty() ? location.path.filename().string() : location.network);
         else if (!fsv::removeBookmark(location))
           throw std::runtime_error("This location has no FSVR bookmark. Imported bookmarks are "
                                    "managed by their originating application.");
@@ -1530,7 +1624,7 @@ public:
       }
     } else if (name == "Open in new tab") {
       if (e && e->directory)
-        newTab(e->member.empty()
+        newTab(!e->networkUri.empty() ? fsv::locationArgument(e->networkUri) : e->member.empty()
                    ? fsv::Location{e->path}
                    : fsv::Location{location.path, e->member, true});
     } else if (name == "New tab")
@@ -1551,6 +1645,13 @@ public:
       else if (name == "Forward" && t.cursor + 1 < t.history.size())
         load(t.history[++t.cursor], false);
     } else if (name == "Up") {
+      if (!location.network.empty() && !location.archive) {
+        auto uri = location.network;
+        auto end = uri.find('/', 6);
+        if (end == std::string::npos || end + 1 >= uri.size()) { command("Home"); return; }
+        uri = uri.substr(0, uri.rfind('/'));
+        load(fsv::locationArgument(uri)); return;
+      }
       if (location.trash) {
         command("Home");
         return;
@@ -1628,7 +1729,7 @@ public:
       }
     } else if (name == "Copy location") {
       auto text =
-          e ? (e->member.empty() ? e->path.string()
+          e ? (!e->networkUri.empty() ? e->networkUri : !networkClient.uriFor(e->path).empty() ? networkClient.uriFor(e->path) : e->member.empty() ? e->path.string()
                                  : location.path.string() + "!/" + e->member)
             : location.display();
       Fl::copy(text.data(), text.size(), 1);
@@ -1713,7 +1814,7 @@ public:
             {"tracked", stereo.mode.trackedEyes}, {"frames", stereo.stereoFrames},
             {"error", stereo.error}, {"picking", spatial.stereoPicking}};
   }
-  bool idle() const { return !scanning.valid() && !operation.valid() && !pasteRead.valid(); }
+  bool idle() const { return !scanning.valid() && !operation.valid() && !pasteRead.valid() && !networkClient.busy(); }
   void smoke(const char *output) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     while (!idle() && std::chrono::steady_clock::now() < deadline)

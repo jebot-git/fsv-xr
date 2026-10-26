@@ -638,6 +638,9 @@ int pick(const Scene &scene, Vec origin, Vec direction) {
   return selected;
 }
 Location locationArgument(const std::string &argument) {
+  if (!g_ascii_strncasecmp(argument.c_str(), "smb:", 4) || argument.rfind("\\\\", 0) == 0) {
+    Location result; result.network = smbUri(argument); return result;
+  }
   if (argument == "trash:" || argument == "trash:/" || argument == "trash://" ||
       argument == "trash:///") {
     Location result;

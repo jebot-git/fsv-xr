@@ -110,7 +110,11 @@ show progress, support cancellation and offer Keep both/Skip/Cancel for conflict
 Existing items are never silently overwritten. See
 [file workflows](docs/FLTK_FILE_WORKFLOWS.md) for behavior, limits and verification.
 
-Remote URLs and remote bookmark mounting are not implemented. Bitmap shaping/bidi,
+SMB/Samba servers and shares support native FLTK authentication, browsing, bookmarks,
+file operations and disconnect through the headless GVfs SMB/FUSE runtime. Enter
+`smb://server/share`, a UNC address, or use **Go → Connect to SMB server…**.
+See [SMB support and dependencies](docs/SMB.md). Other remote URL schemes remain
+unsupported. Bitmap shaping/bidi,
 glyph fallback, accessibility/IME
 and broad fractional-scale coverage remain incomplete. Simulated HMD tests do
 not establish physical headset or WiVRn streaming behavior.
