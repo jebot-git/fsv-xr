@@ -46,6 +46,7 @@ public:
   void renderEye(const fsv::gltf::Mat4 &, float, float, float, int, int);
 
   std::function<void(int)> selectionChanged, openRequested, contextRequested;
+  std::function<void()> dragRequested;
   SpatialView(int x, int y, int w, int h);
   ~SpatialView();
   void setScene(const fsv::Scene *value) {

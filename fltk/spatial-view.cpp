@@ -348,6 +348,11 @@ int SpatialView::handle(int e) {
   if (e == FL_DRAG) {
     int dx = Fl::event_x() - x() - downX, dy = Fl::event_y() - y() - downY;
     dragged = dragged || std::abs(dx) + std::abs(dy) > 2;
+    if (button == 1 && !Fl::event_state(FL_SHIFT) && dragged && selected >= 0 && dragRequested) {
+      button = 0;
+      dragRequested();
+      return 1;
+    }
     if (button == 3) {
       view.yaw += dx * .5;
       view.pitch = std::clamp(view.pitch + dy * .4, -35., 65.);

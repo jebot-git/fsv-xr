@@ -81,6 +81,9 @@ stay last; creation dates depend on `statx` availability. Sorting is saved in
 | Alt+Left / Alt+Right / Alt+Up | Back / forward / parent |
 | F2 / Delete / Alt+Enter | Rename / move to Trash / properties |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste |
+| Ctrl+A; Ctrl/Shift+click | Select all; toggle/range selection in the file list |
+| Left drag selected files | Copy files to another application or folder |
+| Ctrl+D | Bookmark the current folder |
 | Ctrl+Shift+N / F5 | New folder / refresh |
 
 Launch normally from DomeD's XR application launcher for its GPU Wayland/XR
@@ -93,8 +96,22 @@ viewport when switching views or resizing the window.
 DomeD's appearance and bitmap font changes apply live. `--xr` and `--openxr`
 explicitly fail for the filesystem scene. Native glTF objects have their own
 OpenXR overlay viewer, described below.
-Trash restore/empty, full Places and cross-application drag/drop do not yet have the
-Qt frontend's complete UI. Bitmap shaping/bidi, glyph fallback, accessibility/IME
+The Places sidebar includes Home, XDG user folders, Trash, File System and local
+bookmarks imported from GTK and Dolphin. Go → Add/Remove bookmark manages FSVR's
+own bookmarks. `trash:///` opens a combined view of the user's home and mounted
+volume Trash stores, with original locations and deletion dates. File → Restore
+from Trash restores selected items without overwriting existing files; Delete
+permanently and Empty Trash require confirmation.
+
+Copy/cut/paste exchanges native file MIME types with other applications on Wayland
+and X11. Drag from the file list or spatial scene to copy; drop onto a spatial
+folder or empty file area to copy there. Use Cut/Paste to move. Background transfers
+show progress, support cancellation and offer Keep both/Skip/Cancel for conflicts.
+Existing items are never silently overwritten. See
+[file workflows](docs/FLTK_FILE_WORKFLOWS.md) for behavior, limits and verification.
+
+Remote URLs and remote bookmark mounting are not implemented. Bitmap shaping/bidi,
+glyph fallback, accessibility/IME
 and broad fractional-scale coverage remain incomplete. Simulated HMD tests do
 not establish physical headset or WiVRn streaming behavior.
 

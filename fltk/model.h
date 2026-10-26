@@ -25,6 +25,14 @@ struct Entry {
   int parent = -1, depth = 0;
   bool directory = false, symlink = false;
   Vec center, extent;
+  struct Trash {
+    fs::path store, top, original;
+    bool home = false;
+    std::string deleted;
+    uint64_t device = 0, inode = 0;
+    int64_t changedSeconds = 0, changedNanos = 0;
+  };
+  std::optional<Trash> trash;
 };
 enum class SortKey { Name, Size, Modified, Type, Created, Accessed, Extension };
 struct SortOptions {
@@ -44,11 +52,13 @@ struct Location {
   std::string member = "";
   bool archive = false;
   std::string password = "";
+  bool trash = false;
   std::string display() const {
-    return path.string() + (archive ? "!/" + member : "");
+    return trash ? "trash:///" : path.string() + (archive ? "!/" + member : "");
   }
   bool operator==(const Location &b) const {
-    return path == b.path && member == b.member && archive == b.archive;
+    return trash == b.trash &&
+           (trash || (path == b.path && member == b.member && archive == b.archive));
   }
 };
 struct Scene {

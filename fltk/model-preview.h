@@ -78,6 +78,7 @@ public:
             bool inXR = false);
   void command(const std::string &);
   void clearPassive();
+  void previewSelection(const std::filesystem::path &);
   int handle(int) override;
   bool canOpenXR() const { return xr.available && view.asset() != nullptr; }
   void resize(int, int, int, int) override;

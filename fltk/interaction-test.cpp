@@ -119,7 +119,7 @@ int main(int argc, char **argv) try {
   require(browser.currentScene().entries.size() == 2, "Both fixture folders must load");
   for (auto layout : {"map", "tree", "disc"}) {
     browser.setLayout(layout); settle();
-    click(browser, sidebar->x() + 40, sidebar->y() + 12);
+    click(browser, sidebar->list.x() + 40, sidebar->list.y() + 12);
     require(Fl::focus() && sidebar->contains(Fl::focus()), "Sidebar must take focus");
     for (int i = 0; i < 2; ++i) {
       clickFolder(browser, *view, i);
@@ -142,7 +142,7 @@ int main(int argc, char **argv) try {
             "Sidebar and spatial view must meet without overlap or gaps");
     require(sidebar->y() == view->y() && sidebar->h() == view->h(),
             "Both panels must fill the resized content height");
-    click(browser, sidebar->x() + 40, sidebar->y() + 12);
+    click(browser, sidebar->list.x() + 40, sidebar->list.y() + 12);
     clickFolder(browser, *view, 1);
   }
   if (dx::dome()) {

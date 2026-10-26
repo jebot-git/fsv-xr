@@ -1,4 +1,4 @@
-.TH FSVR 1 "2026-10-23" "de-xr" "User Commands"
+.TH FSVR 1 "2026-10-26" "de-xr" "User Commands"
 .SH NAME
 fsvr \- explore files in a native spatial browser
 .SH SYNOPSIS
@@ -12,14 +12,12 @@ fsvr \-\-version
 The default CMake build uses patched FLTK 1.4.5 and OpenGL. It offers list and
 spatial views, MapV/TreeV/DiscV layouts, ray picking, tabs/history, an inspector,
 asynchronous file operations and archive browsing/extraction/compression.
-When multiple path operands are supplied, the last selects the initial location;
-open additional tabs through the interface.
+Multiple path operands open separate tabs.
 .PP
 Qt6/Vulkan is a separate frontend, explicitly selected with
 .BR \-DDE_XR_TOOLKIT=Qt6 .
-Meson currently builds the Qt frontend only. Qt-specific routing options,
-archive URLs, Places/Trash integration and standalone XR must not be assumed
-for the default FLTK executable.
+Meson currently builds the Qt frontend only. Qt-specific routing options and
+standalone XR must not be assumed for the default FLTK executable.
 .SH FLTK OPTIONS
 .TP
 .BI "\-\-layout " map|tree|disc
@@ -36,7 +34,8 @@ The argument is a filename, not a duration.
 Report that standalone OpenXR is not ported and exit with an error.
 Launch through DomeD's XR application launcher instead.
 .PP
-FLTK does not implement the Qt help, desktop/domed routing, select or properties
+--help describes the native command line. --desktop is accepted for DomeD launcher
+compatibility. FLTK does not implement Qt's --domed, --select or --properties
 CLI flags. Use the corresponding interface commands where available.
 .TP
 .B \-\-model-probe
@@ -77,7 +76,23 @@ Ctrl+T opens a tab, Ctrl+W closes it, and Ctrl+Enter opens the selection in a ne
 tab. Alt+Left/Right navigate history, Alt+Up opens the parent and Alt+Home opens
 home. F5 refreshes. F2 renames, Delete moves to Trash and Alt+Enter shows properties.
 Ctrl+C/X/V copy, cut and paste; Ctrl+Shift+C copies the location;
-Ctrl+Shift+N creates a folder. Ctrl+Q quits.
+Ctrl+A selects all, Ctrl/Shift+click toggles/ranges the list selection;
+Ctrl+D bookmarks the current folder. Ctrl+Shift+N creates a folder.
+Super+W closes the window; Super+Q quits.
+.SH PLACES, TRASH AND FILE TRANSFERS
+Places lists Home, XDG user directories, Trash, File System and local GTK/Dolphin
+bookmarks. Go / Add bookmark and Remove bookmark manage FSVR's own bookmarks.
+The location trash:/// opens the current user's home and mounted-volume Trash.
+Restore from Trash returns selected items to their original existing parent
+directories, refusing collisions. Delete permanently and Empty Trash ask for
+confirmation. Damaged metadata can prevent restoration; such entries remain deletable.
+.PP
+Native Wayland and X11 file clipboard formats support cross-application copy/cut/paste.
+Left-drag selected files from the list or spatial view to copy. Drop onto a spatial
+folder or the current file area. Dragging always copies; use Cut/Paste to move.
+Transfers run in the background, support cancellation, and offer Keep both, Skip
+or Cancel on conflicts. Files already completed remain after cancellation.
+Remote URLs and remote bookmark mounting are not supported.
 .SH SORTING
 View / Sort by and folder context menus offer natural Name, Size, Modified,
 Type, Created, Accessed and Extension ordering, ascending/descending,
@@ -89,8 +104,8 @@ DomeD supplies the GPU Wayland/XR surface and ordinary mouse/keyboard seat;
 it owns the headset session. Application menus are exported through
 DBusMenu/KDE AppMenu where supported. DomeD palette and native bitmap strikes
 update live with the required FLTK patches. Native glTF overlays support motion
-controllers; standalone filesystem-scene hands/controllers are not ported. Trash restore/empty, Places and cross-application drag/drop remain
-incomplete relative to Qt. Accessibility/IME, bitmap shaping/bidi and broad
+controllers; standalone filesystem-scene hands/controllers are not ported.
+Accessibility/IME, bitmap shaping/bidi and broad
 fractional-scale coverage also remain incomplete.
 .SH ARCHIVES AND PREVIEWS
 All libarchive readers/filters are enabled. Browse or extract ZIP, 7-Zip, tar,
@@ -115,6 +130,9 @@ open separate tabs. New DomeD settings rows appear in the next session.
 .TP
 .I $XDG_CONFIG_HOME/fsvr/fltk.json
 FLTK sorting settings; the default configuration root is ~/.config.
+.TP
+.I $XDG_CONFIG_HOME/fsvr/places
+FSVR's local bookmarks. GTK and Dolphin bookmarks are also imported.
 .TP
 .I $XDG_CONFIG_HOME/dome/appearance.json
 DomeD appearance settings.

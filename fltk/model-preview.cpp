@@ -306,6 +306,11 @@ void ModelPreview::open(const std::filesystem::path &path, bool showPreview,
     show();
   poll();
 }
+void ModelPreview::previewSelection(const std::filesystem::path &path) {
+  // Explicit preview windows and active XR objects keep their chosen model.
+  if (!shown() && child <= 0 && !pendingXR)
+    open(path, false);
+}
 void ModelPreview::clearPassive() {
   // A hidden inspector preview follows selection, while a user-opened window
   // or active XR object keeps its independent lifetime.

@@ -3,11 +3,12 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig zlib)
 find_package(OpenGL REQUIRED COMPONENTS OpenGL)
 find_package(LibArchive 3.8.10 REQUIRED)
-pkg_check_modules(FILETYPES REQUIRED IMPORTED_TARGET gio-2.0)
-add_library(fsv-native-core STATIC model.cpp archive-ops.cpp)
+pkg_check_modules(FILETYPES REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.84)
+add_library(fsv-native-core STATIC model.cpp archive-ops.cpp desktop-files.cpp)
 target_compile_features(fsv-native-core PUBLIC cxx_std_17)
 target_link_libraries(fsv-native-core PUBLIC LibArchive::LibArchive PkgConfig::FILETYPES)
 find_package(Threads REQUIRED)
+target_link_libraries(fsv-native-core PUBLIC Threads::Threads)
 add_library(fsv-thumbnails STATIC thumbnails.cpp)
 target_compile_features(fsv-thumbnails PUBLIC cxx_std_17)
 target_link_libraries(fsv-thumbnails PUBLIC fsv-thumbnail-decode Threads::Threads PkgConfig::FILETYPES)
@@ -58,12 +59,19 @@ if(BUILD_TESTING)
   target_link_libraries(fltk-appearance-test PRIVATE fltk::gl-shared fltk::fltk-shared fltk::images-shared PkgConfig::FONTCONFIG PkgConfig::FREETYPE)
 endif()
 if(BUILD_TESTING)
+  add_executable(fsv-desktop-files-test desktop-files-test.cpp)
+  target_link_libraries(fsv-desktop-files-test PRIVATE fsv-native-core)
+  add_test(NAME desktop-files-trash-and-transfers COMMAND fsv-desktop-files-test)
+  set_tests_properties(desktop-files-trash-and-transfers PROPERTIES TIMEOUT 30)
   add_executable(fsv-native-core-test model-test.cpp)
   target_link_libraries(fsv-native-core-test PRIVATE fsv-native-core)
   add_test(NAME native-filesystem COMMAND fsv-native-core-test)
 endif()
 
 include(desktop-menu.cmake)
+add_library(fsv-desktop-transfer-ui STATIC file-clipboard.cpp)
+target_compile_features(fsv-desktop-transfer-ui PUBLIC cxx_std_17)
+target_link_libraries(fsv-desktop-transfer-ui PUBLIC fsv-native-core fltk::fltk-shared PkgConfig::DESKTOPMENU Threads::Threads)
 de_xr_desktop_menu(fsvr)
 
 if(BUILD_TESTING)
@@ -78,6 +86,7 @@ if(BUILD_TESTING)
     foreach(desktop Dome XFCE)
       add_test(NAME interaction-${desktop}
         COMMAND ${CMAKE_COMMAND} -E env FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=${desktop}
+          DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/fsvr-test-system-bus
           LIBGL_ALWAYS_SOFTWARE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
           ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-interaction-test>)
       set_tests_properties(interaction-${desktop} PROPERTIES TIMEOUT 45)
@@ -118,6 +127,14 @@ endif()
 add_library(fsv-gltf-core STATIC gltf-model.cpp object-interaction.cpp model-loader.cpp)
 target_compile_features(fsv-gltf-core PUBLIC cxx_std_17)
 target_include_directories(fsv-gltf-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(BUILD_TESTING)
+  add_executable(fsv-gltf-test gltf-test.cpp)
+  target_compile_options(fsv-gltf-test PRIVATE -UNDEBUG)
+  target_link_libraries(fsv-gltf-test PRIVATE fsv-gltf-core)
+  add_test(NAME gltf-model-and-controllers COMMAND fsv-gltf-test)
+  set_tests_properties(gltf-model-and-controllers PROPERTIES TIMEOUT 30)
+endif()
+
 find_package(Threads REQUIRED)
 target_link_libraries(fsv-gltf-core PUBLIC Threads::Threads)
 add_library(fsv-gltf-render STATIC gltf-render.cpp)
@@ -135,6 +152,11 @@ target_link_libraries(fsv-gltf-xr PUBLIC fsv-gltf-render PkgConfig::MODEL_EGL)
 if(FSVR_MODEL_XR)
   target_link_libraries(fsv-gltf-xr PUBLIC PkgConfig::MODEL_XR)
 endif()
+if(BUILD_TESTING)
+  add_executable(fsv-gltf-runner gltf-runner.cpp)
+  target_link_libraries(fsv-gltf-runner PRIVATE fsv-gltf-xr)
+endif()
+
 add_library(fsv-gltf-ui STATIC model-preview.cpp)
 target_compile_features(fsv-gltf-ui PUBLIC cxx_std_17)
 target_link_libraries(fsv-gltf-ui PUBLIC fsv-gltf-xr fltk::gl-shared fltk::fltk-shared fltk::images-shared PkgConfig::FONTCONFIG)
@@ -143,11 +165,78 @@ if(BUILD_TESTING)
   target_link_libraries(fsv-interaction-test PRIVATE fsv-gltf-ui)
   target_link_libraries(fsv-devices-ui-test PRIVATE fsv-gltf-ui)
 endif()
+if(BUILD_TESTING)
+  add_executable(fsv-model-ui-test model-ui-test.cpp spatial-view.cpp)
+  target_compile_features(fsv-model-ui-test PRIVATE cxx_std_17)
+  target_link_libraries(fsv-model-ui-test PRIVATE fsv-thumbnails fsv-native-core fsv-gltf-ui)
+  de_xr_desktop_menu(fsv-model-ui-test)
+  if(XVFB_RUN AND DBUS_RUN_SESSION)
+    add_test(NAME gltf-live-preview-ui COMMAND ${CMAKE_COMMAND} -E env
+      FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+      XR_RUNTIME_JSON=/nonexistent/fsvr-test-runtime.json
+      DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/fsvr-test-system-bus
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+      ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-model-ui-test>
+      ${CMAKE_CURRENT_BINARY_DIR}/gltf-live-preview.ppm)
+    set_tests_properties(gltf-live-preview-ui PROPERTIES TIMEOUT 45)
+  endif()
+endif()
+
+if(BUILD_TESTING AND FSVR_MODEL_XR)
+  add_library(fsv-mock-openxr SHARED ../tests/gltf/mock-openxr.cpp)
+  target_link_libraries(fsv-mock-openxr PRIVATE OpenGL::GL PkgConfig::MODEL_XR)
+  add_test(NAME gltf-stereo-controller-integration COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/gltf/test-xr.py
+    $<TARGET_FILE:fsv-gltf-runner> $<TARGET_FILE:fsv-mock-openxr>)
+  set_tests_properties(gltf-stereo-controller-integration PROPERTIES TIMEOUT 30)
+endif()
+
+if(BUILD_TESTING)
+  add_test(NAME gltf-formats-and-gpu COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/gltf/test-models.py $<TARGET_FILE:fsv-gltf-runner>)
+  set_tests_properties(gltf-formats-and-gpu PROPERTIES TIMEOUT 60)
+endif()
+
 install(FILES ../docs/man/fsvr.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+install(FILES ../docs/FLTK_FILE_WORKFLOWS.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install(FILES ../third_party/README.md ../third_party/gltf-dependencies.json
   ../third_party/LICENSE.native-graphics DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses)
 install(FILES ../third_party/cgltf/cgltf.h DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses/cgltf)
 install(FILES ../third_party/stb/stb_image.h DESTINATION ${CMAKE_INSTALL_DATADIR}/fsvr/licenses/stb)
+
+if(BUILD_TESTING AND FSVR_MODEL_XR AND XVFB_RUN AND DBUS_RUN_SESSION)
+  add_test(NAME gltf-open-in-xr-ui COMMAND ${CMAKE_COMMAND} -E env
+    FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+    XR_RUNTIME_JSON=/nonexistent/fsvr-test-runtime.json
+    DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/fsvr-test-system-bus
+    LD_PRELOAD=$<TARGET_FILE:fsv-mock-openxr>
+    FSVR_MOCK_REPORT=${CMAKE_CURRENT_BINARY_DIR}/gltf-managed-xr.json
+    ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+    ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-model-ui-test>
+    ${CMAKE_CURRENT_BINARY_DIR}/gltf-managed-xr.ppm)
+  set_tests_properties(gltf-open-in-xr-ui PROPERTIES TIMEOUT 45)
+endif()
+
+if(BUILD_TESTING)
+  add_executable(fsv-navigation-test navigation-test.cpp spatial-view.cpp)
+  target_link_libraries(fsv-navigation-test PRIVATE fsv-thumbnails fsv-native-core fsv-gltf-ui)
+  de_xr_desktop_menu(fsv-navigation-test)
+endif()
+
+if(BUILD_TESTING)
+  add_executable(fsv-scan-churn-test scan-churn-test.cpp)
+  target_link_libraries(fsv-scan-churn-test PRIVATE fsv-native-core Threads::Threads)
+  add_test(NAME filesystem-concurrent-mutation COMMAND fsv-scan-churn-test)
+  set_tests_properties(filesystem-concurrent-mutation PROPERTIES TIMEOUT 45)
+  if(XVFB_RUN AND DBUS_RUN_SESSION)
+    add_test(NAME navigation-stress COMMAND ${CMAKE_COMMAND} -E env
+      FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+      DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/fsvr-test-system-bus
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+      ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-navigation-test>)
+    set_tests_properties(navigation-stress PROPERTIES TIMEOUT 120)
+  endif()
+endif()
 
 foreach(target fsvr fsv-interaction-test fsv-devices-ui-test fsv-model-ui-test fsv-navigation-test)
   if(TARGET ${target})
@@ -224,5 +313,28 @@ if(BUILD_TESTING)
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
       ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-model-preview-test>)
     set_tests_properties(model-preview-window-frames PROPERTIES TIMEOUT 30)
+  endif()
+endif()
+
+foreach(target fsvr fsv-interaction-test fsv-devices-ui-test fsv-model-ui-test fsv-navigation-test fsv-preview-navigation-test fsv-archive-ui-test fsv-stereo-ui-test)
+  if(TARGET ${target})
+    target_link_libraries(${target} PRIVATE fsv-desktop-transfer-ui)
+  endif()
+endforeach()
+
+if(BUILD_TESTING)
+  add_executable(fsv-clipboard-fixture clipboard-fixture.cpp)
+  target_link_libraries(fsv-clipboard-fixture PRIVATE fsv-desktop-transfer-ui)
+  add_executable(fsv-desktop-ui-test desktop-ui-test.cpp spatial-view.cpp domed.cpp)
+  target_link_libraries(fsv-desktop-ui-test PRIVATE fsv-thumbnails fsv-gltf-ui fsv-desktop-transfer-ui)
+  de_xr_desktop_menu(fsv-desktop-ui-test)
+  if(XVFB_RUN AND DBUS_RUN_SESSION)
+    add_test(NAME desktop-file-workflows-ui COMMAND ${CMAKE_COMMAND} -E env
+      FLTK_BACKEND=x11 XDG_CURRENT_DESKTOP=Dome LIBGL_ALWAYS_SOFTWARE=1
+      DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/fsvr-test-system-bus
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run-interaction-test.py
+      ${XVFB_RUN} ${DBUS_RUN_SESSION} $<TARGET_FILE:fsv-desktop-ui-test>
+      ${CMAKE_CURRENT_BINARY_DIR}/desktop-files-ui.ppm)
+    set_tests_properties(desktop-file-workflows-ui PROPERTIES TIMEOUT 45)
   endif()
 endif()

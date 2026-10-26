@@ -2,16 +2,17 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
-#include <FL/Fl_Choice.H>
 #include <FL/Fl_Check_Button.H>
-#include <FL/Fl_Return_Button.H>
+#include <FL/Fl_Choice.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Menu_Button.H>
+#include <FL/Fl_Multi_Browser.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Native_File_Chooser.H>
+#include <FL/Fl_Return_Button.H>
 #include <FL/Fl_Tile.H>
 #include <FL/fl_ask.H>
 #include <sys/prctl.h>
@@ -24,16 +25,60 @@
 #include <sstream>
 
 #include "appearance.h"
+#include "desktop-files.h"
 #include "desktop-menu.h"
 #include "devices-client.h"
+#include "file-clipboard.h"
 #include "gpu-window.h"
 #include "model-preview.h"
 #include "model.h"
 #include "spatial-view.h"
 namespace fs = std::filesystem;
+class FilesBrowser : public Fl_Multi_Browser {
+  int armed = 0, downX = 0, downY = 0;
+
+public:
+  using Fl_Multi_Browser::Fl_Multi_Browser;
+  std::function<void()> dragRequested;
+  int handle(int event) override {
+    if (event == FL_PUSH) {
+      armed = 0;
+      if (Fl::event_button() == 1 && !Fl::event_state(FL_CTRL | FL_SHIFT) && !Fl::event_clicks()) {
+        auto item = find_item(Fl::event_y());
+        int row = item ? lineno(item) : 0;
+        if (row > 0 && selected(row)) {
+          armed = row;
+          downX = Fl::event_x();
+          downY = Fl::event_y();
+          take_focus();
+          return 1;
+        }
+      }
+    }
+    if (event == FL_DRAG && armed) {
+      if (std::abs(Fl::event_x() - downX) + std::abs(Fl::event_y() - downY) > 6) {
+        armed = 0;
+        if (dragRequested)
+          dragRequested();
+      }
+      return 1;
+    }
+    if (event == FL_RELEASE && armed) {
+      auto row = armed;
+      armed = 0;
+      deselect();
+      value(row);
+      do_callback();
+      return 1;
+    }
+    return Fl_Multi_Browser::handle(event);
+  }
+};
 class Sidebar : public Fl_Group {
 public:
-  Fl_Hold_Browser list{8, 80, 250, 280};
+  Fl_Box placesTitle{8, 80, 250, 22, "Places"}, filesTitle{8, 200, 250, 22, "Files"};
+  Fl_Hold_Browser places{8, 102, 250, 96};
+  FilesBrowser list{8, 224, 250, 136};
   Fl_Box devicesTitle{8, 364, 250, 22, "Devices"};
   Fl_Hold_Browser devices{8, 386, 250, 120};
   Fl_Button deviceOpen{8, 510, 80, 28, "Open"};
@@ -43,6 +88,9 @@ public:
   Sidebar() : Fl_Group(8, 80, 250, 580) {
     end();
     devicesTitle.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    placesTitle.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    filesTitle.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    places.format_char(0);
     devices.format_char(0);
     deviceOpen.tooltip("Mount or unlock the selected device and open it");
     deviceUnmount.tooltip(
@@ -53,12 +101,15 @@ public:
   }
   void resize(int X, int Y, int W, int H) override {
     Fl_Group::resize(X, Y, W, H);
-    int info = std::min(110, H / 4), media = std::min(120, H / 4);
-    int files = std::max(40, H - info - media - 62);
-    list.resize(X, Y, W, files);
-    devicesTitle.resize(X, Y + files + 4, W, 22);
-    devices.resize(X, Y + files + 26, W, media);
-    int buttonY = Y + files + media + 30, bw = (W - 4) / 3;
+    int info = std::min(100, H / 6), media = std::min(96, H / 6), placeH = std::min(96, H / 6),
+        files = H - info - media - placeH - 116;
+    placesTitle.resize(X, Y, W, 22);
+    places.resize(X, Y + 22, W, placeH);
+    filesTitle.resize(X, Y + placeH + 26, W, 22);
+    list.resize(X, Y + placeH + 48, W, files);
+    devicesTitle.resize(X, list.y() + files + 4, W, 22);
+    devices.resize(X, devicesTitle.y() + 22, W, media);
+    int buttonY = devices.y() + media + 4, bw = (W - 4) / 3;
     deviceOpen.resize(X, buttonY, bw, 28);
     deviceUnmount.resize(X + bw + 2, buttonY, bw, 28);
     deviceRemove.resize(X + 2 * bw + 4, buttonY, W - 2 * bw - 4, 28);
@@ -75,7 +126,7 @@ class Browser : public dx::GpuWindow {
   Fl_Choice tabChoice{650, 40, 150, 30}, layoutChoice{810, 40, 180, 30};
   Fl_Tile panels{8, 80, 984, 580};
   Sidebar sidebar;
-  Fl_Hold_Browser &list = sidebar.list;
+  FilesBrowser &list = sidebar.list;
   Fl_Multiline_Output &inspector = sidebar.inspector;
   SpatialView spatial{258, 80, 734, 580};
   Fl_Box status{8, 665, 984, 30};
@@ -104,6 +155,18 @@ class Browser : public dx::GpuWindow {
   std::shared_ptr<std::atomic_bool> cancelled;
   std::optional<fsv::Location> pending;
   std::future<std::string> operation;
+  std::function<void()> operationDone;
+  std::string operationLabel = "File operation";
+  std::vector<fsv::Place> placeRows;
+  std::string placesSignature, trashSignature;
+  std::chrono::steady_clock::time_point nextPlaces{};
+  std::vector<fs::path> rescanSelection;
+  struct Conflict {
+    fs::path target;
+    std::promise<fsv::Collision> answer;
+  };
+  std::mutex conflictMutex;
+  std::shared_ptr<Conflict> conflict;
   fsv::Location scanTarget;
   std::map<fs::path, std::string> archivePasswords;
   std::shared_ptr<std::atomic_bool> operationCancel;
@@ -111,8 +174,9 @@ class Browser : public dx::GpuWindow {
   std::atomic<size_t> archiveEntries{0};
   std::function<void(const std::string &)> retryArchive;
   Fl_Button cancelArchive{870, 665, 120, 30, "Cancel"};
-  std::vector<std::string> clipboard;
-  bool cut = false;
+  std::unique_ptr<FileClipboard> fileClipboard;
+  std::future<fsv::FileList> pasteRead;
+  fs::path pasteDestination;
   fs::path temporary;
   uint64_t preview = 0;
   DevicesClient devicesClient;
@@ -120,6 +184,80 @@ class Browser : public dx::GpuWindow {
   std::string deviceSignature, deviceError, pendingDevice;
   bool deviceReady = false, automountEnabled = true, openAfterMount = false;
   std::chrono::steady_clock::time_point nextDevices{}, pendingDeviceDeadline{};
+  std::vector<fsv::Entry> selection() const {
+    std::vector<fsv::Entry> result;
+    for (int i = 1; i <= list.size(); ++i)
+      if (list.selected(i) && i <= int(listed.size()))
+        result.push_back(scene.entries[listed[i - 1]]);
+    if (result.empty() && entry() &&
+        std::find(listed.begin(), listed.end(), selected) == listed.end())
+      result.push_back(*entry());
+    return result;
+  }
+  std::optional<fs::path> dropDestination(int x, int y) {
+    if (operation.valid() || location.archive || location.trash)
+      return {};
+    auto inside = [&](const Fl_Widget &w) {
+      return x >= w.x() && x < w.x() + w.w() && y >= w.y() && y < w.y() + w.h();
+    };
+    if (inside(spatial) && spatial.visible()) {
+      int i = spatial.pickAt(x - spatial.x(), y - spatial.y());
+      if (i >= 0 && i < int(scene.entries.size()) && scene.entries[i].directory &&
+          !scene.entries[i].symlink)
+        return scene.entries[i].path;
+      return location.path;
+    }
+    if (inside(list))
+      return location.path;
+    return {};
+  }
+  void dragFiles() {
+    if (location.archive || location.trash || operation.valid())
+      return;
+    fsv::FileList files;
+    for (auto &e : selection())
+      files.paths.push_back(e.path);
+    if (files.paths.empty())
+      return;
+    try {
+      fileClipboard->drag(files);
+    } catch (const std::exception &e) {
+      status.copy_label(e.what());
+    }
+  }
+  void updatePlaces() {
+    auto now = std::chrono::steady_clock::now();
+    if (now < nextPlaces)
+      return;
+    nextPlaces = now + std::chrono::seconds(2);
+    auto rows = fsv::places();
+    std::string signature;
+    for (auto &p : rows)
+      signature += p.name + '\n' + p.location.display() + '\n';
+    if (signature != placesSignature) {
+      placeRows = std::move(rows);
+      placesSignature = signature;
+      sidebar.places.clear();
+      for (auto &p : placeRows)
+        sidebar.places.add(plainLabel(p.name).c_str());
+    }
+    for (size_t i = 0; i < placeRows.size(); ++i)
+      if (placeRows[i].location == location)
+        sidebar.places.value(i + 1);
+    if (location.trash && idle()) {
+      signature.clear();
+      for (auto &t : fsv::trashLocations())
+        for (auto suffix : {"files", "info"}) {
+          std::error_code ec;
+          auto time = fs::last_write_time(t.directory / suffix, ec);
+          signature += t.directory.string() + suffix +
+                       (ec ? "missing" : std::to_string(time.time_since_epoch().count()));
+        }
+      if (!trashSignature.empty() && signature != trashSignature)
+        load(location, false);
+      trashSignature = signature;
+    }
+  }
   Json selectedDevice() const {
     int row = sidebar.devices.value() - 1;
     return row >= 0 && row < int(deviceRows.size()) ? deviceRows[row] : Json();
@@ -354,31 +492,73 @@ class Browser : public dx::GpuWindow {
       s->command(bar->mvalue()->label());
   }
   void poll() {
+    try {
+      if (fileClipboard)
+        fileClipboard->poll();
+    } catch (const std::exception &e) {
+      status.copy_label(e.what());
+    }
+    if (pasteRead.valid() &&
+        pasteRead.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      try {
+        auto files = pasteRead.get();
+        transferFiles(std::move(files), pasteDestination);
+      } catch (const std::exception &e) {
+        status.copy_label(e.what());
+      }
+    }
+    updatePlaces();
+    std::shared_ptr<Conflict> question;
+    {
+      std::lock_guard<std::mutex> lock(conflictMutex);
+      question = std::move(conflict);
+    }
+    if (question) {
+      int answer = fl_choice("A destination name already exists:\n%s\nChoose how to handle name "
+                             "conflicts in this transfer.",
+                             "Cancel", "Keep both", "Skip", question->target.filename().c_str());
+      if (answer == 0 && operationCancel)
+        *operationCancel = true;
+      question->answer.set_value(answer == 1   ? fsv::Collision::KeepBoth
+                                 : answer == 2 ? fsv::Collision::Skip
+                                               : fsv::Collision::Fail);
+    }
     pollDevices();
     spatial.pollThumbnails();
     if (operationCancel) {
       cancelArchive.resize(w()-130,status.y(),120,30);
       cancelArchive.show();
       status.resize(8, status.y(), w()-150, 30);
-      status.copy_label(("Archive operation: " + std::to_string(archiveEntries.load()) + " entries, " + std::to_string(archiveBytes.load()/1024) + " KiB").c_str());
+      status.copy_label((operationLabel + ": " + std::to_string(archiveEntries.load()) +
+                         " entries, " + std::to_string(archiveBytes.load() / 1024) + " KiB")
+                            .c_str());
     } else { cancelArchive.hide(); status.resize(8,status.y(),w()-16,30); }
     bool available = entry() != nullptr, idle = !operation.valid(),
-         writable = !location.archive && idle;
-    bool model = entry() && !entry()->directory && entry()->member.empty() &&
+         writable = !location.archive && !location.trash && idle;
+    bool model = !location.trash && entry() && !entry()->directory && entry()->member.empty() &&
                  fsv::gltf::supported(entry()->path);
     dx::enable_menu(menu, "File/Live glTF preview", model);
     dx::enable_menu(menu, "File/Open in XR",
                     model && modelPreview && modelPreview->canOpenXR());
     for (auto name : {"File/Open", "File/Properties", "Edit/Copy location"})
       dx::enable_menu(menu, name, available);
+    dx::enable_menu(menu, "File/Open", available && !location.trash);
+    dx::enable_menu(menu, "File/Open in new tab",
+                    available && entry()->directory && !location.trash);
     for (auto name : {"File/Rename...", "File/Move to Trash",
                       "File/Compress...", "Edit/Cut", "Edit/Copy"})
       dx::enable_menu(menu, name, available && writable);
     dx::enable_menu(menu, "File/New folder...", writable);
+    dx::enable_menu(menu, "File/Restore from Trash", location.trash && available && idle);
+    dx::enable_menu(menu, "File/Delete permanently", location.trash && available && idle);
+    dx::enable_menu(menu, "File/Empty Trash", location.trash && idle);
+    dx::enable_menu(menu, "Go/Add bookmark", !location.trash && !location.archive);
     for (auto command : {"File/Extract archive", "File/Extract to..."})
-      dx::enable_menu(menu, command, idle && (location.archive || (available && !entry()->directory)));
+      dx::enable_menu(menu, command,
+                      idle && !location.trash &&
+                          (location.archive || (available && !entry()->directory)));
     dx::enable_menu(menu, "File/Extract selected...", idle && location.archive && available);
-    dx::enable_menu(menu, "Edit/Paste", writable && !clipboard.empty());
+    dx::enable_menu(menu, "Edit/Paste", writable && !pasteRead.valid());
     dx::enable_menu(menu, "Go/Back", !tabs.empty() && tabs[tab].cursor > 0);
     dx::enable_menu(menu, "Go/Forward",
                     !tabs.empty() &&
@@ -400,6 +580,13 @@ class Browser : public dx::GpuWindow {
               layout);
           spatial.setScene(&scene);
           fillList();
+          for (auto &saved : rescanSelection)
+            for (size_t i = 0; i < listed.size(); ++i)
+              if (scene.entries[listed[i]].path == saved) {
+                list.select(i + 1, 1);
+                select(listed[i], true);
+              }
+          rescanSelection.clear();
           status.copy_label((std::to_string(scene.entries.size()) +
                              " entries. " + result.result.warning +
                              "  Wheel: zoom · Right drag: "
@@ -426,6 +613,7 @@ class Browser : public dx::GpuWindow {
     if (operation.valid() && operation.wait_for(std::chrono::seconds(0)) ==
                                  std::future_status::ready) {
       auto error = operation.get();
+      auto done = std::move(operationDone);
       auto retry = std::move(retryArchive);
       bool cancelled = operationCancel && operationCancel->load();
       operationCancel.reset();
@@ -434,6 +622,13 @@ class Browser : public dx::GpuWindow {
         if (password) { retry(password); return; }
         status.copy_label("Archive password entry cancelled.");
       } else if (!error.empty() && !cancelled) fl_alert("%s", error.c_str());
+      if (done) {
+        try {
+          done();
+        } catch (const std::exception &e) {
+          status.copy_label(e.what());
+        }
+      }
       load(location, false);
     }
   }
@@ -446,7 +641,7 @@ class Browser : public dx::GpuWindow {
     scanning = promise.get_future();
     std::thread([target, token, p = std::move(promise)]() mutable {
       try {
-        if (!target.archive) {
+        if (!target.archive && !target.trash) {
           target.path = fs::canonical(target.path);
           if (!fs::is_directory(target.path)) {
             if (!fsv::archiveSupported(target.path))
@@ -475,12 +670,12 @@ class Browser : public dx::GpuWindow {
         continue;
       listed.push_back(i);
       auto name = (e.directory ? "[folder] " : "         ") + e.name;
-      list.add(name.c_str());
+      list.add(plainLabel(name).c_str());
     }
     select(-1);
     traceSort();
   }
-  void select(int value) {
+  void select(int value, bool preserve = false) {
     if(modelPreview && (value<0 || value>=int(scene.entries.size()) || scene.entries[value].directory || !scene.entries[value].member.empty() || !fsv::gltf::supported(scene.entries[value].path))) modelPreview->clearPassive();
     selected = value;
     spatial.setSelected(value);
@@ -488,7 +683,10 @@ class Browser : public dx::GpuWindow {
     for (int i = 0; i < int(listed.size()); ++i)
       if (listed[i] == value)
         row = i + 1;
-    list.value(row);
+    if (!preserve) {
+      list.deselect();
+      list.value(row);
+    }
     if (value < 0 || value >= int(scene.entries.size())) {
       inspector.value("Select a file or platform.\nMapV, TreeV and "
                       "DiscV\nrendered directly with OpenGL.");
@@ -506,7 +704,10 @@ class Browser : public dx::GpuWindow {
     out << "\nType: " << e.type << "\nModified: " << date(e.modified)
         << "\nCreated: " << date(e.created)
         << "\nAccessed: " << date(e.accessed);
-    if (!e.directory &&
+    if (e.trash)
+      out << "\nOriginal: " << e.trash->original.string() << "\nDeleted: " << e.trash->deleted
+          << "\nRestore before opening this item.";
+    if (!e.trash && !e.directory &&
         fsv::gltf::supported(e.member.empty() ? e.path : fs::path(e.member))) {
       if (e.member.empty()) {
         out << "\nDouble-click: live 3D preview. File "
@@ -514,7 +715,7 @@ class Browser : public dx::GpuWindow {
                "manipulation.";
         if (!modelPreview)
           modelPreview = std::make_unique<ModelPreview>();
-        modelPreview->open(e.path, false);
+        modelPreview->previewSelection(e.path);
       } else
         out << "\nExtract the model and resources for "
                "a live glTF preview.";
@@ -716,8 +917,9 @@ class Browser : public dx::GpuWindow {
   void updateTabs() {
     tabChoice.clear();
     for (auto &t : tabs) {
-      auto name = t.location.archive ? t.location.path.filename().string() + "!"
-                                     : t.location.path.filename().string();
+      auto name = t.location.trash     ? "Trash"
+                  : t.location.archive ? t.location.path.filename().string() + "!"
+                                       : t.location.path.filename().string();
       if (name.empty())
         name = "/";
       tabChoice.add(name.c_str());
@@ -730,6 +932,7 @@ class Browser : public dx::GpuWindow {
       return;
     }
     retryArchive = {};
+    operationDone = {};
     operationCancel.reset();
     operation = std::async(std::launch::async, [fn]() {
       try {
@@ -748,9 +951,56 @@ class Browser : public dx::GpuWindow {
     if (!options.cancel) options.cancel = std::make_shared<std::atomic_bool>(false);
     options.progress = [this](uint64_t bytes, size_t entries, const std::string &) { archiveBytes = bytes; archiveEntries = entries; };
     archiveBytes = 0; archiveEntries = 0;
+    operationLabel = "Archive operation";
     work([fn, options] { fn(options); });
     operationCancel = options.cancel;
     retryArchive = [this, fn, options](const std::string &password) mutable { options.password = password; archiveWork(fn, options); };
+  }
+  void transferFiles(fsv::FileList files, const fs::path &destination) {
+    if (operation.valid()) {
+      status.copy_label("Wait for the current file operation.");
+      return;
+    }
+    if (files.paths.empty()) {
+      status.copy_label("Clipboard does not contain files.");
+      return;
+    }
+    auto token = std::make_shared<std::atomic_bool>(false);
+    auto completed = std::make_shared<std::vector<fs::path>>();
+    fsv::TransferOptions options;
+    options.completed = [completed](const fs::path &source) { completed->push_back(source); };
+    options.cancel = token;
+    options.progress = [this](uint64_t bytes, size_t count) {
+      archiveBytes = bytes;
+      archiveEntries = count;
+    };
+    auto policy = std::make_shared<std::optional<fsv::Collision>>();
+    options.collision = [this, token, policy](const fs::path &target) {
+      if (*policy)
+        return **policy;
+      auto q = std::make_shared<Conflict>();
+      q->target = target;
+      auto answer = q->answer.get_future();
+      {
+        std::lock_guard<std::mutex> lock(conflictMutex);
+        conflict = q;
+      }
+      Fl::awake();
+      while (answer.wait_for(std::chrono::milliseconds(40)) != std::future_status::ready) {
+        if (*token)
+          throw std::runtime_error("File operation cancelled");
+      }
+      *policy = answer.get();
+      return **policy;
+    };
+    work([files, destination, options] {
+      fsv::transfer(files, destination, options);
+    });
+    archiveBytes = 0;
+    archiveEntries = 0;
+    operationCancel = token;
+    operationLabel = files.cut ? "Moving files" : "Copying files";
+    operationDone = [this, files, completed] { fileClipboard->moved(files, *completed); };
   }
   fsv::ArchiveOptions archiveOptions(const fs::path &source) const {
     fsv::ArchiveOptions options;
@@ -839,9 +1089,9 @@ class Browser : public dx::GpuWindow {
     Fl_Menu_Button popup(Fl::event_x(), Fl::event_y(), 0, 0);
     popup.type(Fl_Menu_Button::POPUP3);
     for (auto label :
-         {"Open", "Open in new tab", "Live glTF preview", "Open in XR",
-          "Properties", "Cut", "Copy", "Paste", "Rename...", "Move to Trash",
-          "Compress...", "Extract archive", "Extract to...", "Extract selected..."})
+         {"Open", "Open in new tab", "Live glTF preview", "Open in XR", "Properties", "Cut", "Copy",
+          "Paste", "Rename...", "Move to Trash", "Restore from Trash", "Delete permanently",
+          "Empty Trash", "Compress...", "Extract archive", "Extract to...", "Extract selected..."})
       popup.add(label, 0, action, this);
     auto e = entry();
     bool model = e && !e->directory && e->member.empty() &&
@@ -849,6 +1099,10 @@ class Browser : public dx::GpuWindow {
     dx::enable_menu(popup, "Live glTF preview", model);
     dx::enable_menu(popup, "Open in XR",
                     model && modelPreview && modelPreview->canOpenXR());
+    for (auto command : {"Cut", "Copy", "Paste", "Rename...", "Move to Trash", "Compress..."})
+      dx::enable_menu(popup, command, !location.trash && !location.archive && !operation.valid());
+    for (auto command : {"Restore from Trash", "Delete permanently", "Empty Trash"})
+      dx::enable_menu(popup, command, location.trash && !operation.valid());
     sortMenu(popup, "Sort by/");
     dx::style(&popup);
     popup.popup();
@@ -863,6 +1117,14 @@ public:
     add(status);
     add(cancelArchive);
     sidebar.resize(sidebar.x(), sidebar.y(), sidebar.w(), sidebar.h());
+    sidebar.places.callback(
+        [](Fl_Widget *, void *p) {
+          auto s = static_cast<Browser *>(p);
+          int i = s->sidebar.places.value() - 1;
+          if (i >= 0 && i < int(s->placeRows.size()))
+            s->load(s->placeRows[i].location);
+        },
+        this);
     sidebar.devices.callback(
         [](Fl_Widget *, void *p) {
           static_cast<Browser *>(p)->deviceInfo();
@@ -891,7 +1153,7 @@ public:
           auto s = (Browser *)p;
           int i = s->list.value() - 1;
           if (i >= 0 && i < int(s->listed.size()))
-            s->select(s->listed[i]);
+            s->select(s->listed[i], true);
           if (Fl::event_clicks())
             s->open();
         },
@@ -912,16 +1174,23 @@ public:
              {"File/Extract to...", 0},
              {"File/Extract selected...", 0},
              {"File/Move to Trash", FL_Delete},
-             {"File/Quit", FL_CTRL + 'q'},
+             {"File/Restore from Trash", 0},
+             {"File/Delete permanently", FL_SHIFT + FL_Delete},
+             {"File/Empty Trash", 0},
+             {"File/Quit", FL_META + 'q'},
              {"Edit/Cut", FL_CTRL + 'x'},
              {"Edit/Copy", FL_CTRL + 'c'},
              {"Edit/Paste", FL_CTRL + 'v'},
              {"Edit/Copy location", FL_CTRL + FL_SHIFT + 'c'},
+             {"Edit/Select all", FL_CTRL + 'a'},
              {"Edit/Find...", FL_CTRL + 'f'},
              {"Go/Back", FL_ALT + FL_Left},
              {"Go/Forward", FL_ALT + FL_Right},
              {"Go/Up", FL_ALT + FL_Up},
              {"Go/Home", FL_ALT + FL_Home},
+             {"Go/Trash", 0},
+             {"Go/Add bookmark", FL_CTRL + 'd'},
+             {"Go/Remove bookmark", 0},
              {"Go/Refresh", FL_F + 5},
              {"View/Reset view", 'r'},
              {"View/Focus selection", 'f'},
@@ -970,7 +1239,17 @@ public:
         this);
     upButton.callback(
         [](Fl_Widget *, void *p) { ((Browser *)p)->command("Up"); }, this);
-    spatial.selectionChanged = [this](int i) { select(i); };
+    spatial.selectionChanged = [this](int i) {
+      if (Fl::event_state(FL_CTRL)) {
+        for (size_t n = 0; n < listed.size(); ++n)
+          if (listed[n] == i)
+            list.select(n + 1, !list.selected(n + 1));
+        select(i, true);
+      } else
+        select(i);
+    };
+    spatial.dragRequested = [this] { dragFiles(); };
+    list.dragRequested = [this] { dragFiles(); };
     spatial.openRequested = [this](int i) {
       select(i);
       open();
@@ -1002,6 +1281,14 @@ public:
     if (auto value = mkdtemp(name))
       temporary = value;
     desktop = std::make_unique<DesktopMenu>(*this, menu);
+    fileClipboard = std::make_unique<FileClipboard>(*this);
+    dx::native_event_filter = FileClipboard::filter;
+    fileClipboard->acceptsDrop = [this](int x, int y) { return dropDestination(x, y).has_value(); };
+    fileClipboard->dropped = [this](fsv::FileList files, int x, int y) {
+      if (auto destination = dropDestination(x, y))
+        transferFiles(std::move(files), *destination);
+    };
+    fileClipboard->failed = [this](const std::string &error) { status.copy_label(error.c_str()); };
     cancelArchive.callback([](Fl_Widget *, void *p){ auto s=static_cast<Browser *>(p); if(s->operationCancel) *s->operationCancel=true; },this);
     cancelArchive.hide();
     Fl::add_timeout(.05, tick, this);
@@ -1065,13 +1352,21 @@ public:
     if (event == FL_SHORTCUT && !menu.visible() && !Fl::modal() &&
         menu.handle(event))
       return 1;
+    if (fileClipboard) {
+      int result = fileClipboard->handle(event);
+      if (result >= 0) return result;
+    }
     return dx::GpuWindow::handle(event);
   }
   void load(fsv::Location target, bool history = true) {
     try {
       if (operation.valid())
         throw std::runtime_error("Wait for the current file operation");
-      if (!target.archive)
+      rescanSelection.clear();
+      if (target == location)
+        for (auto &e : selection())
+          rescanSelection.push_back(e.path);
+      if (!target.archive && !target.trash)
         target.path = fs::absolute(target.path).lexically_normal();
       if (tabs.empty()) {
         tabs.push_back({});
@@ -1090,9 +1385,9 @@ public:
       location = target;
       path.value(target.display().c_str());
       updateTabs();
-      copy_label(((target.archive
-                       ? target.path.filename().string() + "!/" + target.member
-                       : target.path.filename().string()) +
+      copy_label(((target.trash     ? "Trash"
+                   : target.archive ? target.path.filename().string() + "!/" + target.member
+                                    : target.path.filename().string()) +
                   " — fsvr (FLTK)")
                      .c_str());
       scene = {};
@@ -1114,6 +1409,10 @@ public:
     if (!e)
       return;
     auto node = *e;
+    if (location.trash) {
+      status.copy_label("Restore this item before opening it.");
+      return;
+    }
     if (node.directory) {
       load(node.member.empty()
                ? fsv::Location{node.path}
@@ -1143,6 +1442,74 @@ public:
     spatial.setSelected(selected);
   }
   void command(const std::string &name) {
+    if (location.trash &&
+        (name == "Open" || name == "Open in new tab" || name == "Live glTF preview" ||
+         name == "Open in XR" || name == "Compress..." || name == "Extract archive" ||
+         name == "Extract to..." || name == "Extract selected..." || name == "Terminal here")) {
+      status.copy_label("Restore this item before opening it.");
+      return;
+    }
+    if (name == "Trash") {
+      fsv::Location target;
+      target.trash = true;
+      load(target);
+      return;
+    }
+    if (name == "Add bookmark" || name == "Remove bookmark") {
+      try {
+        if (name == "Add bookmark")
+          fsv::bookmark(location, location.path.filename());
+        else if (!fsv::removeBookmark(location))
+          throw std::runtime_error("This location has no FSVR bookmark. Imported bookmarks are "
+                                   "managed by their originating application.");
+        nextPlaces = {};
+        updatePlaces();
+      } catch (const std::exception &e) {
+        status.copy_label(e.what());
+      }
+      return;
+    }
+    if (name == "Select all") {
+      for (int i = 1; i <= list.size(); ++i)
+        list.select(i, 1);
+      if (!listed.empty())
+        select(listed.front(), true);
+      return;
+    }
+    if (name == "Restore from Trash" || name == "Delete permanently" || name == "Empty Trash") {
+      if (operation.valid()) {
+        status.copy_label("Wait for the current file operation.");
+        return;
+      }
+      if (!location.trash)
+        return;
+      auto items = selection();
+      if (name != "Restore from Trash" &&
+          fl_choice(name == "Empty Trash"
+                        ? "Permanently delete all items in Trash on currently available volumes?"
+                        : "Permanently delete the selected Trash items?",
+                    "Cancel", "Delete", nullptr) != 1)
+        return;
+      auto token = std::make_shared<std::atomic_bool>(false);
+      work([items, name, token] {
+        if (name == "Empty Trash")
+          fsv::emptyTrash(token);
+        else
+          for (auto &e : items) {
+            if (*token)
+              break;
+            if (name == "Restore from Trash")
+              fsv::restoreTrash(e);
+            else
+              fsv::eraseTrash(e);
+          }
+      });
+      operationCancel = token;
+      operationLabel = name;
+      archiveBytes = 0;
+      archiveEntries = 0;
+      return;
+    }
     if (name == "Open device" || name == "Unmount device" ||
         name == "Safely remove drive" || name == "Lock encrypted device" ||
         name == "Automount removable media") {
@@ -1184,6 +1551,10 @@ public:
       else if (name == "Forward" && t.cursor + 1 < t.history.size())
         load(t.history[++t.cursor], false);
     } else if (name == "Up") {
+      if (location.trash) {
+        command("Home");
+        return;
+      }
       if (location.archive) {
         if (location.member.empty())
           load({location.path.parent_path()});
@@ -1236,7 +1607,13 @@ public:
       init_sizes();
       redraw();
     } else if (name == "Properties") {
-      if (e)
+      if (e && e->trash)
+        fl_message("%s\n%s · %llu bytes\nOriginal: %s\nDeleted: %s\nTrash item: %s",
+                   e->name.c_str(), e->type.c_str(), (unsigned long long)e->bytes,
+                   e->trash->original.empty() ? "Unavailable" : e->trash->original.c_str(),
+                   e->trash->deleted.empty() ? "Unavailable" : e->trash->deleted.c_str(),
+                   e->path.c_str());
+      else if (e)
         fl_message("%s\n%s\n%s · %llu bytes\nModified: "
                    "%s\nCreated: %s\nAccessed: %s",
                    e->name.c_str(), e->path.c_str(), e->type.c_str(),
@@ -1256,7 +1633,7 @@ public:
             : location.display();
       Fl::copy(text.data(), text.size(), 1);
     } else if (name == "Terminal here") {
-      if (!location.archive)
+      if (!location.archive && !location.trash)
         dx::spawn({"env", "-C", location.path.string(), "x-terminal-emulator"});
     } else if (name == "Close window" || name == "Quit")
       requestClose();
@@ -1266,35 +1643,34 @@ public:
       createArchive(e->path);
     } else if (name == "Extract archive" || name == "Extract to..." || name == "Extract selected...") {
       extractArchive(name != "Extract archive", name == "Extract selected...");
-    } else if (location.archive) {
-      status.copy_label("Archive contents are read-only. Extract to modify "
-                        "them.");
+    } else if (location.archive || location.trash) {
+      status.copy_label(location.trash ? "Restore Trash items before modifying them."
+                                      : "Archive contents are read-only. Extract to modify them.");
     } else if (name == "Cut" || name == "Copy") {
       if (e) {
-        clipboard = {e->path.string()};
-        cut = name == "Cut";
-        std::string uri = "file://" + e->path.string() + "\r\n";
-        Fl::copy(uri.data(), uri.size(), 1);
+        fsv::FileList files;
+        for (auto &item : selection())
+          files.paths.push_back(item.path);
+        files.cut = name == "Cut";
+        try {
+          fileClipboard->copy(files);
+          status.copy_label(files.cut ? "Files cut; paste into a destination folder."
+                                      : "Files copied; paste into a destination folder.");
+        } catch (const std::exception &e) {
+          status.copy_label(e.what());
+        }
       }
     } else if (name == "Paste") {
-      auto sources = clipboard;
-      auto destination = location.path;
-      bool move = cut;
-      if (move)
-        clipboard.clear();
-      work([sources, destination, move] {
-        for (auto &source : sources) {
-          auto target = destination / fs::path(source).filename();
-          if (fs::exists(target))
-            throw std::runtime_error("Destination exists: " + target.string());
-          if (move)
-            fs::rename(source, target);
-          else
-            fs::copy(source, target,
-                     fs::copy_options::recursive |
-                         fs::copy_options::copy_symlinks);
-        }
-      });
+      if (pasteRead.valid()) {
+        status.copy_label("Wait for the clipboard transfer.");
+        return;
+      }
+      try {
+        pasteDestination = location.path;
+        pasteRead = fileClipboard->paste();
+      } catch (const std::exception &e) {
+        status.copy_label(e.what());
+      }
     } else if (name == "New folder...") {
       auto value = fl_input("New folder name:");
       if (value) {
@@ -1316,28 +1692,17 @@ public:
       auto value = fl_input("Rename to:", source.filename().c_str());
       if (value) {
         std::string name = value;
-        work([source, name] {
-          if (name.empty() || fs::path(name).filename() != name ||
-              name == "." || name == "..")
-            throw std::runtime_error("Enter a single filename");
-          auto dest = source.parent_path() / name;
-          if (fs::exists(dest))
-            throw std::runtime_error("Destination exists");
-          fs::rename(source, dest);
-        });
+        work([source, name] { fsv::renameFile(source, name); });
       }
     } else if (name == "Move to Trash") {
       if (!e)
         return;
-      auto source = e->path;
-      if (fl_choice("Move selected item to Trash?", "Cancel", "Move",
+      auto items = selection();
+      if (fl_choice("Move selected items to Trash?", "Cancel", "Move",
                     nullptr) == 1) {
-        work([source] {
-          auto pid = dx::spawn({"gio", "trash", source.string()});
-          int status = 0;
-          if (pid < 0 || waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) ||
-              WEXITSTATUS(status))
-            throw std::runtime_error("Moving to Trash failed");
+        work([items] {
+          for (auto &item : items)
+            fsv::moveToTrash(item.path);
         });
       }
     }
@@ -1348,7 +1713,7 @@ public:
             {"tracked", stereo.mode.trackedEyes}, {"frames", stereo.stereoFrames},
             {"error", stereo.error}, {"picking", spatial.stereoPicking}};
   }
-  bool idle() const { return !scanning.valid() && !operation.valid(); }
+  bool idle() const { return !scanning.valid() && !operation.valid() && !pasteRead.valid(); }
   void smoke(const char *output) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     while (!idle() && std::chrono::steady_clock::now() < deadline)
@@ -1403,7 +1768,7 @@ int main(int argc, char **argv) {
     }
   }
   if (argc > 1 && std::string(argv[1]) == "--help") {
-    puts("fsvr [--desktop] [--layout map|tree|disc] [--] [directory | archive | local-file-URL ...]\n"
+    puts("fsvr [--desktop] [--layout map|tree|disc] [--] [directory | archive | local-file-URL | trash:/// ...]\n"
          "Native FLTK/OpenGL file and archive browser. Multiple operands open tabs.\n"
          "Archives: browse, create, extract, choose destination or selected members.\n"
          "Use --version for build information.");

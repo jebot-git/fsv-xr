@@ -98,7 +98,12 @@ inline void style_new_windows(void *) {
   }
 }
 inline Fl_Event_Dispatch previous_dispatch = nullptr;
+inline int (*native_event_filter)(int, Fl_Window *) = nullptr;
 inline int dispatch(int event, Fl_Window *window) {
+  if (native_event_filter) {
+    int result = native_event_filter(event, window);
+    if (result >= 0) return result;
+  }
   if (window && event == FL_SHOW)
     style(window);
   return previous_dispatch ? previous_dispatch(event, window)

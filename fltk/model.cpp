@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Toolkit-neutral port of the original fsvr scan and TreeV/MapV/DiscV layouts.
 #include "model.h"
+#include "desktop-files.h"
 #include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
@@ -186,6 +187,8 @@ Result scan(const Location &location,
             const std::shared_ptr<std::atomic_bool> &cancel, int maxDepth,
             size_t limit) {
   Result result;
+  if (location.trash)
+    return scanTrash(trashLocations(), cancel, limit);
   bool truncated = false, unreadable = false;
   if (!location.archive) {
     std::function<void(fs::path, int, int)> visit = [&](fs::path path,
@@ -635,6 +638,12 @@ int pick(const Scene &scene, Vec origin, Vec direction) {
   return selected;
 }
 Location locationArgument(const std::string &argument) {
+  if (argument == "trash:" || argument == "trash:/" || argument == "trash://" ||
+      argument == "trash:///") {
+    Location result;
+    result.trash = true;
+    return result;
+  }
   if (argument.rfind("archive:", 0) == 0) {
     auto split=argument.find('#');
     auto encoded=argument.substr(8,split==std::string::npos?std::string::npos:split-8);
