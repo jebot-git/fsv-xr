@@ -46,7 +46,21 @@ try:
         for n in range(8):
             folder=fixture/f'Folder {n}';folder.mkdir();(folder/'file.txt').write_text('Example contents'*100)
         marker=out/'toggle-ready';marker.unlink(missing_ok=True)
+        for kind in ('input','chooser','custom'):
+            for suffix in ('ready','checked'):(out/(kind+'-'+suffix)).unlink(missing_ok=True)
         app=start([exe,fixture,out],{**env,'WAYLAND_DISPLAY':desktop,'FLTK_BACKEND':'wayland'},'fsvr')
+        for kind in ('input','chooser','custom'):
+            wait(lambda:(out/(kind+'-ready')).exists() or app.poll() is not None)
+            assert (out/(kind+'-ready')).exists(),(out/'fsvr.log').read_text()
+            def dialog_state():
+                windows=[w for w in get('/api/state')['scene']['windows'] if w['client_pid']==app.pid]
+                main=next((w for w in windows if w['app_id']=='org.fsvxr.fsvr.Sbs'),None)
+                dialog=next((w for w in windows if w['app_id']=='org.fsvxr.fsvr'),None)
+                return (main,dialog) if main and dialog else None
+            main,dialog=wait(dialog_state)
+            assert main['stereo']=='side_by_side',main
+            assert dialog['stereo']=='mono',dialog
+            (out/(kind+'-checked')).touch()
         wait(lambda:marker.exists() or app.poll() is not None)
         assert marker.exists(),(out/'fsvr.log').read_text()
         window=next(w for w in get('/api/state')['scene']['windows'] if w['app_id']=='org.fsvxr.fsvr.Sbs')

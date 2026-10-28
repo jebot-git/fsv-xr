@@ -4,6 +4,11 @@ FSVR uses its FLTK/OpenGL interface on both Wayland and X11. DomeD supplies the
 universal menu, appearance and XR window surface. File operations run in workers;
 the interface remains responsive and the status area offers progress and Cancel.
 
+The browser uses `org.fsvxr.fsvr.Sbs` for its in-window stereo view. Standard
+input and confirmation dialogs, native file choosers and custom archive dialogs
+use the mono default identity `org.fsvxr.fsvr`, so DomeD shows their full contents
+in both eyes without splitting them into SBS halves.
+
 ## Selection and Places
 
 The file list supports Ctrl-click, Shift-click and Ctrl+A. A spatial click focuses

@@ -1827,6 +1827,13 @@ public:
   }
   fsv::Scene &currentScene() { return scene; }
 };
+static void initializeApplication() {
+  // Only the browser packs SBS pixels. Native and custom dialogs must not
+  // inherit the first window's stereo identity (the same policy as qimgvr).
+  Fl_Window::default_xclass("org.fsvxr.fsvr");
+  dx::init();
+}
+
 int main(int argc, char **argv) {
   if (argc > 1 && std::string(argv[1]) == "--model-probe") {
     auto p = fsv::gltf::probeXr();
@@ -1879,7 +1886,7 @@ int main(int argc, char **argv) {
     printf("fsvr FLTK 1.4.5 OpenGL · %s\n",archive_version_string());
     return 0;
   }
-  dx::init();
+  initializeApplication();
   fl_register_images();
   Browser browser;
   std::vector<std::string> operands;

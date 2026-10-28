@@ -11,7 +11,7 @@ template<class F> void waitFor(F f) {
 }
 int main(int argc,char **argv) try {
   require(argc==3,"Expected fixture and output directory");
-  dx::init();
+  initializeApplication();
   Browser browser; browser.show(); browser.load({argv[1]});
   fs::path output=argv[2];
   waitFor([&] { return browser.idle() && browser.stereoStatus()["frames"].get<int>()>5; });
@@ -45,6 +45,42 @@ int main(int argc,char **argv) try {
     int hit=view->pickAt(x,y); if(hit>=0) hits.insert(hit);
   }
   require(hits.size()>=4,"Stereo pointer rays miss the scene");
+  auto checkDialog = [&](const char *kind, const std::function<void()> &show) {
+    struct Check {
+      fs::path output;
+      std::string kind, error;
+      bool inspected = false;
+    } check{output, kind, "", false};
+    Fl::add_timeout(.2, [](void *value) {
+      auto &check = *static_cast<Check *>(value);
+      auto dialog = Fl::modal();
+      try {
+        require(dialog, "Missing modal dialog");
+        require(dialog->xclass() && std::string(dialog->xclass()) == "org.fsvxr.fsvr",
+                "Dialog inherited the browser SBS identity");
+        std::ofstream(check.output/(check.kind+"-ready")) << dialog->xclass();
+        waitFor([&] { return fs::exists(check.output/(check.kind+"-checked")); });
+        check.inspected = true;
+      } catch (const std::exception &error) { check.error = error.what(); }
+      if (dialog) dialog->hide();
+    }, &check);
+    show();
+    require(check.error.empty(), check.error.c_str());
+    require(check.inspected, "Dialog identity was not inspected");
+  };
+  checkDialog("input", [&] { browser.command("New folder..."); });
+  checkDialog("chooser", [&] {
+    Fl_Native_File_Chooser chooser;
+    chooser.title("Choose folder");
+    chooser.type(Fl_Native_File_Chooser::BROWSE_DIRECTORY);
+    chooser.directory(argv[1]);
+    chooser.show();
+  });
+  checkDialog("custom", [&] {
+    Fl_Double_Window dialog(560, 170, "Archive dialog fixture");
+    dialog.end(); dialog.set_modal(); dx::style(&dialog); dialog.show();
+    while (dialog.shown()) Fl::wait();
+  });
   browser.command("Stereo 3D");
   browser.make_current();browser.draw();
   require(!browser.stereoStatus()["enabled"] && !browser.stereoStatus()["picking"],"Depth toggle failed");
@@ -54,5 +90,5 @@ int main(int argc,char **argv) try {
   browser.hide();
   Browser restored;
   require(!restored.stereoStatus()["enabled"],"Stereo preference was not saved");
-  std::cout << "PASS tracked in-window stereo, cylinder warp, identical chrome, depth toggle, desktop return and saved preference\n";
+  std::cout << "PASS tracked in-window stereo, mono input/file/custom dialogs, cylinder warp, identical chrome, depth toggle, desktop return and saved preference\n";
 } catch(const std::exception &e) { std::cerr << e.what()<<'\n';return 1; }
