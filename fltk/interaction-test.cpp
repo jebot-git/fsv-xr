@@ -83,6 +83,92 @@ void clickFolder(Browser &browser, SpatialView &view, int index) {
   require(view.selectedIndex() == index,
           "A spatial click must select the folder under the pointer");
 }
+void contextMenu(Browser &browser, SpatialView &view, bool activate) {
+  struct Probe {
+    bool activate, hover = false, release = false, finished = false;
+    int step = 0;
+  } probe{activate};
+  auto tick = +[](void *data) {
+    auto &p = *static_cast<Probe *>(data);
+    auto menu = Fl::grab();
+    if (!menu) { p.finished = true; return; }
+    Fl::e_x = 12; Fl::e_y = 12;
+    Fl::e_x_root = menu->x() + 12; Fl::e_y_root = menu->y() + 12;
+    Fl::e_state = 0;
+    if (p.step == 0) {
+      Fl::handle(FL_ENTER, menu);
+      Fl::handle(FL_MOVE, menu);
+    } else if (p.step == 1) {
+      p.hover = true;
+      // A delayed/synthetic release with no matching press must not pick the
+      // item highlighted by pointer entry. Movement clears FLTK's click flag.
+      Fl::e_keysym = FL_Button + 3; Fl::e_is_click = 0;
+      Fl::handle(FL_RELEASE, menu);
+    } else {
+      p.release = true;
+      if (p.activate) {
+        Fl::e_keysym = FL_Button + 1; Fl::e_state = FL_BUTTON1;
+        Fl::handle(FL_PUSH, menu);
+        Fl::e_state = 0;
+        Fl::handle(FL_RELEASE, menu);
+      } else {
+        Fl::e_keysym = FL_Escape;
+        Fl::handle(FL_KEYDOWN, menu);
+      }
+      p.finished = true;
+    }
+    ++p.step;
+  };
+  // Separate event-loop turns let the menu process every injected event.
+  Fl::add_timeout(.05, tick, &probe);
+  Fl::add_timeout(.10, tick, &probe);
+  Fl::add_timeout(.15, tick, &probe);
+  view.make_current(); view.draw();
+  auto &entry = browser.currentScene().entries.at(1);
+  double x, y;
+  require(view.projectPoint({entry.center.x, entry.center.y + entry.extent.y / 2,
+                             entry.center.z}, x, y), "Context target projection");
+  Fl::e_x = view.x() + std::lround(x);
+  Fl::e_y = view.y() + std::lround(y);
+  Fl::e_x_root = browser.x() + Fl::e_x;
+  Fl::e_y_root = browser.y() + Fl::e_y;
+  Fl::e_keysym = FL_Button + 3; Fl::e_state = FL_BUTTON3;
+  Fl::e_clicks = 0; Fl::e_is_click = 1;
+  Fl::handle(FL_PUSH, &browser);
+  Fl::e_state = 0;
+  auto dispatch = Fl::event_dispatch();
+  Fl::handle(FL_RELEASE, &browser);
+  Fl::remove_timeout(tick, &probe);
+  require(probe.hover && probe.release && probe.finished,
+          "Hover and an unmatched release must leave the context menu open");
+  require(!Fl::grab(), "Click or Escape must dismiss the context menu");
+  require(Fl::event_dispatch() == dispatch, "Context menu must restore event dispatch");
+  browser.smoke(nullptr);
+}
+void rightGesture(SpatialView &view) {
+  auto context = view.contextRequested;
+  int requests = 0;
+  view.contextRequested = [&](int) { ++requests; };
+  Fl::e_keysym = FL_Button + 3;
+  view.handle(FL_PUSH);
+  view.handle(FL_RELEASE);
+  view.handle(FL_MOVE);
+  view.handle(FL_RELEASE);
+  bool once = requests == 1;
+  auto yaw = view.view.yaw;
+  view.handle(FL_PUSH);
+  Fl::e_x += 20;
+  view.handle(FL_DRAG);
+  view.handle(FL_RELEASE);
+  bool drag = requests == 1 && view.view.yaw != yaw;
+  // A release for a different button cannot complete the context gesture.
+  view.handle(FL_PUSH);
+  Fl::e_keysym = FL_Button + 1;
+  view.handle(FL_RELEASE);
+  view.contextRequested = context;
+  require(once && requests == 1, "A right click must request its menu only once");
+  require(drag, "Right drag must rotate without opening a menu");
+}
 int main(int argc, char **argv) try {
   char temporary[] = "/tmp/fsvr-interaction-XXXXXX";
   require(mkdtemp(temporary), "Temporary fixture");
@@ -151,6 +237,15 @@ int main(int argc, char **argv) try {
             "Hidden menu must retain F6 shortcut");
     require(browser.handle(FL_SHORTCUT) && view->visible(), "F6 must restore the view");
   }
+  contextMenu(browser, *view, false);
+  require(std::string(findWidget<Fl_Input>(browser)->value()) == files.string(),
+          "Hover and Escape must not open a folder");
+  contextMenu(browser, *view, true);
+  require(std::string(findWidget<Fl_Input>(browser)->value()) == (files / "beta").string(),
+          "A fresh menu click must activate Open on the right-clicked folder");
+  browser.load({files}); browser.smoke(nullptr);
+  rightGesture(*view);
+  view->reset(); settle();
   clickFolder(browser, *view, 1);
   if (argc > 1) browser.smoke(argv[1]);
   browser.command("Open"); browser.smoke(nullptr);
@@ -171,8 +266,11 @@ int main(int argc, char **argv) try {
   Fl::e_keysym = 'w'; Fl::e_state = FL_META;
   require(menu->handle(FL_SHORTCUT), "Close-window shortcut dispatch");
   require(!browser.shown(), "Super+W closes the window with multiple tabs");
+  // Destruction of a still-focused window must clear focus before destroying
+  // the clipboard/event handlers used by the resulting FL_UNFOCUS events.
+  browser.show(); view->take_focus(); settle();
   std::cout << "PASS: " << (dx::dome() ? "Dome universal menu" : "standalone menu")
-            << ", spatial picking in all layouts, sidebar focus, splitter/toggle/resize and open\n";
+            << ", context hover/release/click/Escape, right drag, spatial picking in all layouts, sidebar focus, splitter/toggle/resize and open\n";
 } catch (const std::exception &error) {
   std::cerr << error.what() << '\n'; return 1;
 }

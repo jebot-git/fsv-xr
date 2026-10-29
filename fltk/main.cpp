@@ -35,6 +35,39 @@
 #include "network-ui.h"
 #include "spatial-view.h"
 namespace fs = std::filesystem;
+// These menus open after the originating button is already up. FLTK also
+// accepts drag releases without a menu press, so require a fresh click here.
+class MenuClickGuard {
+  inline static MenuClickGuard *current = nullptr;
+  MenuClickGuard *parent = current;
+  Fl_Event_Dispatch previous = Fl::event_dispatch();
+  int pressed = 0;
+  static int dispatch(int event, Fl_Window *window) {
+    auto &guard = *current;
+    if (event == FL_PUSH)
+      guard.pressed = Fl::event_button();
+    if (event == FL_RELEASE) {
+      if (!guard.pressed || guard.pressed != Fl::event_button())
+        return 1;
+      guard.pressed = 0;
+    }
+    auto outer = &guard;
+    while (outer->previous == dispatch)
+      outer = outer->parent;
+    return outer->previous ? outer->previous(event, window)
+                           : Fl::handle_(event, window);
+  }
+
+public:
+  MenuClickGuard() {
+    current = this;
+    Fl::event_dispatch(dispatch);
+  }
+  ~MenuClickGuard() {
+    Fl::event_dispatch(previous);
+    current = parent;
+  }
+};
 class FilesBrowser : public Fl_Multi_Browser {
   int armed = 0, downX = 0, downY = 0;
 
@@ -1161,7 +1194,15 @@ class Browser : public dx::GpuWindow {
       dx::enable_menu(popup, command, location.trash && !operation.valid());
     sortMenu(popup, "Sort by/");
     dx::style(&popup);
-    popup.popup();
+    popup.menu_end();
+    const Fl_Menu_Item *picked;
+    {
+      MenuClickGuard guard;
+      picked = popup.menu()->popup(Fl::event_x(), Fl::event_y(), nullptr,
+                                   nullptr, &popup);
+    }
+    // Restore normal event dispatch before commands can open other dialogs.
+    popup.picked(picked);
   }
 
 public:
@@ -1382,6 +1423,8 @@ public:
   }
   ~Browser() {
     if (Fl_Gl_Window::context()) { make_current(); stereo.release(); }
+    // Clear focus while event handlers and their member state still exist.
+    hide();
     Fl::remove_timeout(tick, this);
     if (cancelled)
       *cancelled = true;

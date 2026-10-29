@@ -365,13 +365,17 @@ int SpatialView::handle(int e) {
     redraw();
     return 1;
   }
-  if (e == FL_RELEASE && button == 3 && !dragged) {
-    selected = pickAt(Fl::event_x() - x(), Fl::event_y() - y());
-    if (selectionChanged)
-      selectionChanged(selected);
-    if (contextRequested)
-      contextRequested(selected);
-    return 1;
+  if (e == FL_RELEASE) {
+    int released = button;
+    button = 0;
+    if (released == 3 && Fl::event_button() == 3 && !dragged) {
+      selected = pickAt(Fl::event_x() - x(), Fl::event_y() - y());
+      if (selectionChanged)
+        selectionChanged(selected);
+      if (contextRequested)
+        contextRequested(selected);
+      return 1;
+    }
   }
   if (e == FL_MOUSEWHEEL) {
     view.zoom =
