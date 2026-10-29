@@ -85,7 +85,8 @@ void clickFolder(Browser &browser, SpatialView &view, int index) {
 }
 void contextMenu(Browser &browser, SpatialView &view, bool activate) {
   struct Probe {
-    bool activate, hover = false, release = false, finished = false;
+    bool activate, hover = false, release = false, submenu = false,
+         returned = false, finished = false;
     int step = 0;
   } probe{activate};
   auto tick = +[](void *data) {
@@ -104,8 +105,23 @@ void contextMenu(Browser &browser, SpatialView &view, bool activate) {
       // item highlighted by pointer entry. Movement clears FLTK's click flag.
       Fl::e_keysym = FL_Button + 3; Fl::e_is_click = 0;
       Fl::handle(FL_RELEASE, menu);
-    } else {
+    } else if (p.step == 2) {
       p.release = true;
+      Fl::e_y = menu->h() - 12;
+      Fl::e_y_root = menu->y() + Fl::e_y;
+      Fl::handle(FL_MOVE, menu); // Sort by opens its child menu.
+    } else if (p.step == 3) {
+      for (auto child = Fl::first_window(); child; child = Fl::next_window(child)) {
+        if (child == menu || !child->menu_window()) continue;
+        p.submenu = true;
+        Fl::e_x_root = child->x() + 12; Fl::e_y_root = child->y() + 12;
+        Fl::handle(FL_MOVE, child);
+        break;
+      }
+    } else if (p.step == 4) {
+      Fl::handle(FL_MOVE, menu); // Returning closes only the child menu.
+    } else {
+      p.returned = true;
       if (p.activate) {
         Fl::e_keysym = FL_Button + 1; Fl::e_state = FL_BUTTON1;
         Fl::handle(FL_PUSH, menu);
@@ -123,6 +139,9 @@ void contextMenu(Browser &browser, SpatialView &view, bool activate) {
   Fl::add_timeout(.05, tick, &probe);
   Fl::add_timeout(.10, tick, &probe);
   Fl::add_timeout(.15, tick, &probe);
+  Fl::add_timeout(.20, tick, &probe);
+  Fl::add_timeout(.25, tick, &probe);
+  Fl::add_timeout(.30, tick, &probe);
   view.make_current(); view.draw();
   auto &entry = browser.currentScene().entries.at(1);
   double x, y;
@@ -139,8 +158,11 @@ void contextMenu(Browser &browser, SpatialView &view, bool activate) {
   auto dispatch = Fl::event_dispatch();
   Fl::handle(FL_RELEASE, &browser);
   Fl::remove_timeout(tick, &probe);
-  require(probe.hover && probe.release && probe.finished,
+  require(probe.hover && probe.release,
           "Hover and an unmatched release must leave the context menu open");
+  require(probe.submenu && probe.returned,
+          "Returning from a submenu must preserve the parent context menu");
+  require(probe.finished, "Click or Escape must finish context menu interaction");
   require(!Fl::grab(), "Click or Escape must dismiss the context menu");
   require(Fl::event_dispatch() == dispatch, "Context menu must restore event dispatch");
   browser.smoke(nullptr);
