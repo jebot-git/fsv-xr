@@ -357,8 +357,9 @@ directories retain their settings. Update them with:
 meson configure builddir --buildtype=release -Db_lto=true -Db_ndebug=if-release
 ```
 
-The system install provides **fsvr** in the application menu, plus **fsvr
-(OpenXR)** when standalone XR is built. Keep `/usr/local/bin` in the desktop
+The Qt install provides **fsvr** when a DomeD login session is installed,
+otherwise **fsvr (OpenXR)** when standalone XR is built. With standalone XR
+disabled, it provides the ordinary **fsvr** entry. Keep `/usr/local/bin` in the desktop
 session's `PATH`. A per-user alternative is `cmake --install build --prefix "$HOME/.local"`. The main entry follows DomeD's selected desktop/XR Wayland realm and theme.
 Inside DomeD, fsvr exports File, Edit, View, Go, Window and Help menus to the
 universal menu strip; Super+F10 opens it and Ctrl+L edits the location.
@@ -670,3 +671,19 @@ appearance file update existing Qt Quick text and text previews; fixed heading
 sizes no longer override the bitmap strike. An unavailable bitmap face or strike
 falls back to the Qt application font. Outside DomeD, including standalone XR,
 the interface uses normal Qt font and palette settings.
+
+## Desktop entry selection
+
+Installation selects one menu entry: the DomeD entry when `dome.desktop` or
+`domed.desktop` is available in `wayland-sessions` or `xsessions`, otherwise the
+generic XR entry. DomeD takes priority when other sessions are also installed;
+`Hidden=true` sessions are ignored. Reinstalling removes the obsolete entry.
+CMake checks the install prefix's `share`, `/usr/local/share`, and `/usr/share`
+at install time, checking both `DESTDIR` and the host when staging. For an
+isolated target, configure `-DDE_XR_SESSION_ROOT=/path/to/target-root` (an empty
+root selects generic XR). Run `python3 tests/test-desktop-entry.py` to verify
+the installation rule without building the application.
+
+The FLTK fsvr frontend retains its ordinary entry because standalone OpenXR
+is unavailable there. For Meson installs of Qt fsvr, set the environment variable
+`DE_XR_SESSION_ROOT` to isolate session discovery to a target root.
