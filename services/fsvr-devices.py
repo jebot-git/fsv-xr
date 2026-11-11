@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""FSVR removable-media service. Only Python, GIO and UDisks2; no GUI imports."""
+"""FSVR volume service and removable-media automounter; no GUI imports."""
 import json
 import os
 from pathlib import Path
@@ -18,6 +18,7 @@ XML = '''<node><interface name="org.fsvxr.Devices">
 <method name="Action"><arg name="action" type="s" direction="in"/>
 <arg name="device" type="s" direction="in"/><arg name="secret" type="s" direction="in"/>
 <arg type="s" direction="out"/></method></interface></node>'''
+SYSTEM_MOUNTS = ('/', '/boot', '/boot/efi', '/home', '/usr', '/var')
 
 
 def text(value):
@@ -52,8 +53,6 @@ def devices(objects):
         # The unlocked filesystem represents an encrypted volume without a second row.
         if encrypted is not None and clear:
             continue
-        if not external and not mounts:
-            continue
         device = text(block.get('PreferredDevice') or block.get('Device'))
         label = block.get('HintName') or block.get('IdLabel') or os.path.basename(device) or 'Volume'
         result.append(dict(id=path, name=label, device=device, drive=drive,
@@ -61,6 +60,10 @@ def devices(objects):
                            filesystem=filesystem is not None, locked=encrypted is not None,
                            backing=backing if backing != '/' else '',
                            removable=external and not system,
+                           # HintSystem also marks ordinary internal data disks.
+                           # Only active system mounts are browse-only; explicit
+                           # operations on other volumes use UDisks/Polkit policy.
+                           operable=not any(m in SYSTEM_MOUNTS for m in mounts),
                            ejectable=bool(props.get('Ejectable')),
                            poweroff=bool(props.get('CanPowerOff')),
                            # Respect fstab/crypttab ownership and udev hint policy.
@@ -86,7 +89,7 @@ def removable_group(objects, group):
         mounts = obj.get('Filesystem', {}).get('MountPoints', [])
         if block.get('HintSystem', True) or (block.get('HintIgnore') and mounts):
             return False
-        if any(text(m) in ('/', '/boot', '/boot/efi', '/home', '/usr', '/var') for m in mounts):
+        if any(text(m) in SYSTEM_MOUNTS for m in mounts):
             return False
     return True
 
@@ -199,9 +202,6 @@ class Service:
         if row is None:
             reject('This device is no longer available.')
             return
-        if not row['removable']:
-            reject('System and fixed volumes are browse-only.')
-            return
         group = drive_group(self.objects, row['drive'])
         if group & self.busy:
             reject('A device operation is already in progress.')
@@ -212,6 +212,9 @@ class Service:
         if action == 'mount' and row['mounts']:
             if invocation:
                 invocation.return_value(GLib.Variant('(s)', (json.dumps({'path':row['mounts'][0]}),)))
+            return
+        if not row['operable']:
+            reject('Mounted system volumes are browse-only.')
             return
         if action == 'mount' and not row['filesystem'] or action == 'unlock' and not row['locked']:
             reject('The device does not support this operation.')

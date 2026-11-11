@@ -462,6 +462,8 @@ class Browser : public dx::GpuWindow {
     bool selected = !row.is_null(),
          idle = !devicesClient.busy() && !operation.valid();
     bool mounted = selected && !row.value("mounts", Json::array()).empty();
+    bool operable =
+        selected && row.value("operable", row.value("removable", false));
     bool removable = selected && row.value("removable", false);
     auto enable = [&](Fl_Widget &widget, bool value) {
       if (value)
@@ -470,17 +472,17 @@ class Browser : public dx::GpuWindow {
         widget.deactivate();
     };
     enable(sidebar.deviceOpen, selected && idle);
-    enable(sidebar.deviceUnmount, removable && mounted && idle);
+    enable(sidebar.deviceUnmount, operable && mounted && idle);
     enable(sidebar.deviceRemove,
            removable && idle &&
                (row.value("poweroff", false) || row.value("ejectable", false)));
     dx::enable_menu(menu, "Devices/Open device", selected && idle);
     dx::enable_menu(menu, "Devices/Unmount device",
-                    removable && mounted && idle);
+                    operable && mounted && idle);
     dx::enable_menu(menu, "Devices/Safely remove drive",
                     sidebar.deviceRemove.active());
     dx::enable_menu(menu, "Devices/Lock encrypted device",
-                    removable && idle &&
+                    operable && idle &&
                         !row.value("backing", std::string()).empty());
     dx::enable_menu(menu, "Devices/Automount removable media",
                     deviceReady && idle);
@@ -497,7 +499,7 @@ class Browser : public dx::GpuWindow {
                                         ? "Devices"
                                         : "Devices (service unavailable)");
     sidebar.devicesTitle.copy_tooltip(
-        deviceError.empty() ? "Removable devices and mounted volumes"
+        deviceError.empty() ? "Internal and removable volumes"
                             : deviceError.c_str());
   }
   void deviceInfo() {

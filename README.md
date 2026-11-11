@@ -188,15 +188,19 @@ Vendored licenses and source pins are in [third_party](third_party/README.md).
 
 ## Native devices and automounting
 
-The FLTK sidebar now has a live **Devices** list: Home, File System, mounted
-volumes, and removable media even when unmounted or encrypted. Double-click or
-**Open** mounts a removable filesystem or asks for its encryption passphrase in
-a native FLTK password dialog, then opens the mount returned by UDisks2.
+The FLTK sidebar now has a live **Devices** list: Home, File System, and internal
+and removable volumes even when unmounted or encrypted. Double-click or **Open**
+mounts a filesystem or asks for its encryption passphrase in a native FLTK
+password dialog, then opens the mount returned by UDisks2.
 **Unmount** never forces busy volumes. **Remove** unmounts the drive's volumes,
 locks unlocked encrypted containers, then ejects/powers off the drive; a failed
 step stops removal. Drives sharing a UDisks sibling ID are handled together.
-System/fixed volumes are browse-only. The inspector shows the device, mount
-paths, and operation errors. The current view returns Home when its mount goes
+Internal volumes support explicit mount, unmount, unlock and lock operations
+under the existing UDisks/Polkit permissions. Active system mounts (including
+`/`, `/boot` and `/home`) remain browse-only, and drives flagged as system drives
+cannot be safely removed. Internal volumes are never automatically mounted.
+The inspector shows the device, mount paths, and operation errors. The current
+view returns Home when its mount goes
 away. Device actions also appear in DomeD's universal menu.
 
 `fsvr-devices` is a per-user Python/GIO daemon using UDisks2 over the system bus.
